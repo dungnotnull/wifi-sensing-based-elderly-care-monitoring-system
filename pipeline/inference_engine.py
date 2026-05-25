@@ -335,31 +335,57 @@ class InferenceEngine:
                 continue
 
             zid = zone["zone_id"]
-            worker_classes = [
-                FallDetectionWorker,
-                VitalSignsWorker,
-                SleepWorker,
-                ActivityWorker,
-            ]
 
-            for wcls in worker_classes:
-                worker_name = f"{wcls.__name__.replace('Worker', '')}_{zid}"
-                worker_config = {
+            # Shared fall event queue for this zone (fall worker -> activity worker)
+            fall_event_queue = mp.Queue(maxsize=50)
+
+            worker_configs = [
+                (FallDetectionWorker, {
                     "sample_rate": 50.0,
                     "window_size": 100,
+                    "n_subcarriers": 52,
+                    "confidence_threshold": 0.85,
+                    "confirmation_window_seconds": 3.0,
+                    "inactivity_threshold": 0.15,
+                }),
+                (VitalSignsWorker, {
+                    "sample_rate": 50.0,
                     "fft_window_seconds": 30.0,
                     "update_interval_seconds": 5.0,
+                }),
+                (SleepWorker, {
+                    "sample_rate": 50.0,
                     "epoch_duration_minutes": 1,
+                }),
+                (ActivityWorker, {
+                    "sample_rate": 50.0,
                     "window_seconds": 30.0,
+                    "threshold_active": 0.5,
+                    "threshold_still": 0.15,
+                    "inactivity_timeout_seconds": 7200.0,
+                    "daytime_start_hour": 6,
+                    "daytime_end_hour": 22,
+                    "recovery_timeout_seconds": 30.0,
+                }),
+            ]
+
+            for wcls, worker_config in worker_configs:
+                worker_name = f"{wcls.__name__.replace('Worker', '')}_{zid}"
+
+                kwargs: dict[str, Any] = {
+                    "name": worker_name,
+                    "zone_id": zid,
+                    "input_queue": self.input_queue,
+                    "output_queue": self.output_queue,
+                    "stop_event": self.stop_event,
+                    "config": worker_config,
                 }
-                worker = wcls(
-                    name=worker_name,
-                    zone_id=zid,
-                    input_queue=self.input_queue,
-                    output_queue=self.output_queue,
-                    stop_event=self.stop_event,
-                    config=worker_config,
-                )
+
+                # Only fall and activity workers get the shared fall event queue
+                if wcls in (FallDetectionWorker, ActivityWorker):
+                    kwargs["fall_event_queue"] = fall_event_queue
+
+                worker = wcls(**kwargs)
                 self.workers.append(worker)
 
     def start(self) -> None:

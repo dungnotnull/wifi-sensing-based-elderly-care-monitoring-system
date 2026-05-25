@@ -2,6 +2,7 @@
 import pytest
 import torch
 from models.fall_detection.model import FallDetector, TwoStageConfirmer
+from pipeline.inference_engine import FallDetectionWorker, ActivityWorker
 
 
 class TestFallDetector:
@@ -71,6 +72,25 @@ class TestFallConfirmationEvent:
         assert event.zone_id == "zone_bedroom"
         assert event.timestamp == 1000.0
         assert event.confidence == 0.95
+
+
+class TestInferenceEngineWorkerWiring:
+    def test_fall_and_activity_workers_share_fall_event_queue(self) -> None:
+        from pipeline.inference_engine import InferenceEngine
+
+        engine = InferenceEngine(config_path="configs/zones.yaml")
+
+        fall_workers = [w for w in engine.workers if isinstance(w, FallDetectionWorker)]
+        activity_workers = [w for w in engine.workers if isinstance(w, ActivityWorker)]
+
+        assert len(fall_workers) > 0, "No FallDetectionWorkers created"
+        assert len(activity_workers) > 0, "No ActivityWorkers created"
+
+        # Each zone's fall worker and activity worker share the same queue
+        for fw in fall_workers:
+            matching_aw = [aw for aw in activity_workers if aw.zone_id == fw.zone_id]
+            assert len(matching_aw) == 1
+            assert fw._fall_event_queue is matching_aw[0]._fall_event_queue
 
 
 class TestFallDetectionWorkerIntegration:
