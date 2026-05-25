@@ -141,7 +141,7 @@ jobs:
         run: find artifacts -type f
 
       - name: Create or Update Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: RuView Desktop v${{ github.event.inputs.version || '0.4.0' }}
           tag_name: ${{ github.event.inputs.attach_to_existing || format('desktop-v{0}', github.event.inputs.version || '0.4.0') }}

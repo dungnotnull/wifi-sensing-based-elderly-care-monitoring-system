@@ -405,7 +405,7 @@ jobs:
 
     - name: Create GitHub Release
       if: github.ref == 'refs/heads/main' && needs.docker-build.result == 'success'
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       with:
         tag_name: v${{ github.run_number }}
         name: Release v${{ github.run_number }}
