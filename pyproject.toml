@@ -151,7 +151,7 @@ docs = [
 gpu = [
     "torch>=2.1.0",
     "torchvision>=0.16.0",
-    "nvidia-ml-py>=12.535.0",
+    "nvidia-ml-py>=13.595.45",
 ]
 
 monitoring = [
