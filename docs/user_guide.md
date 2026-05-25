@@ -1,190 +1,165 @@
-# ElderCare — Hướng Dẫn Sử Dụng / User Guide
+# ElderCare — User Guide
 
-Hướng dẫn dành cho người chăm sóc và gia đình.
-Guide for caregivers and family members.
+A guide for caregivers and family members.
 
-Mục lục / Table of Contents:
-1. [Tổng quan / Overview](#1-tổng-quan--overview)
-2. [Bảng điều khiển / Dashboard](#2-bảng-điều-khiển--dashboard)
-3. [Cảnh báo Telegram / Telegram Alerts](#3-cảnh-báo-telegram--telegram-alerts)
-4. [Hiểu các chỉ số / Understanding Metrics](#4-hiểu-các-chỉ-số--understanding-metrics)
-5. [Báo cáo hàng ngày / Daily Report](#5-báo-cáo-hàng-ngày--daily-report)
-6. [Xử lý khi có cảnh báo / Responding to Alerts](#6-xử-lý-khi-có-cảnh-báo--responding-to-alerts)
-7. [Câu hỏi thường gặp / FAQ](#7-câu-hỏi-thường-gặp--faq)
+Table of Contents:
+1. [Overview](#1-overview)
+2. [Dashboard](#2-dashboard)
+3. [Telegram Alerts](#3-telegram-alerts)
+4. [Understanding Metrics](#4-understanding-metrics)
+5. [Daily Report](#5-daily-report)
+6. [Responding to Alerts](#6-responding-to-alerts)
+7. [FAQ](#7-faq)
 
 ---
 
-## 1. Tổng quan / Overview
+## 1. Overview
 
-ElderCare là hệ thống giám sát người cao tuổi **không dùng camera, không cần thiết bị đeo**. Hệ thống sử dụng sóng WiFi để phát hiện:
-- **Té ngã** (fall detection)
-- **Nhịp thở** (respiration rate)
-- **Chất lượng giấc ngủ** (sleep quality)
-- **Mức độ hoạt động** (activity level)
-
-Tất cả dữ liệu được xử lý tại nhà, **không gửi lên mạng (cloud)**.
-
-ElderCare is a monitoring system for elderly people that uses **no cameras and no wearables**. It uses WiFi signals to detect:
+ElderCare is an elderly monitoring system that uses **no cameras and no wearables**. It uses WiFi signals to detect:
 - **Falls**
 - **Breathing rate**
 - **Sleep quality**
 - **Activity level**
 
-All data is processed locally — **nothing is sent to the cloud**.
+All data is processed locally on the home server — **nothing is sent to the cloud**.
 
 ---
 
-## 2. Bảng điều khiển / Dashboard
+## 2. Dashboard
 
-Truy cập / Access: `http://<địa-chỉ-máy-chủ>:8000`
+Access the dashboard at: `http://<server-address>:8000`
 
-### 2.1 Trang chủ / Home Page
+### 2.1 Home Page
 
-Màn hình chính hiển thị:
+The main screen shows:
 
-| Mục / Item | Ý nghĩa / Meaning |
+| Item | Meaning |
 |---|---|
-| 🛏️ Tên khu vực / Zone name | Phòng đang được giám sát / Room being monitored |
-| Trạng thái / Status | Hoạt động / Active — Nghỉ ngơi / Still — Không hoạt động / Inactive |
-| Nhịp thở / Respiration | Số nhịp thở mỗi phút (bình thường: 12-20) |
-| Nhịp tim / Heart rate | Nhịp tim mỗi phút (thử nghiệm) |
-| Phát hiện té ngã / Fall detected | Có/Không |
-| Điểm giấc ngủ / Sleep score | 0-100 (trên 80 = rất tốt) |
+| 🛏️ Zone name | Room being monitored |
+| Status | Active / Still / Inactive |
+| Respiration | Breaths per minute (normal: 12–20) |
+| Heart rate | Beats per minute (experimental) |
+| Fall detected | Yes / No |
+| Sleep score | 0–100 (above 80 = excellent) |
 
-### 2.2 Các trang / Pages
+### 2.2 Pages
 
-| Đường dẫn / URL | Nội dung / Content |
+| URL | Content |
 |---|---|
-| `/api/zones` | Trạng thái từng khu vực / Per-zone status |
-| `/api/vitals?zone_id=zone_bedroom` | Lịch sử nhịp thở 1 giờ / 1-hour respiration history |
-| `/api/alerts` | Nhật ký cảnh báo 50 mục gần nhất / Last 50 alerts |
-| `/api/sleep?zone_id=zone_bedroom` | Điểm giấc ngủ 30 ngày / 30-day sleep scores |
-| `/api/daily-summary` | Báo cáo hàng ngày / Daily summary |
-| `/api/health` | Trạng thái hệ thống / System health |
+| `/api/zones` | Per-zone status |
+| `/api/vitals?zone_id=zone_bedroom` | 1-hour respiration history |
+| `/api/alerts` | Last 50 alerts |
+| `/api/sleep?zone_id=zone_bedroom` | 30-day sleep scores |
+| `/api/daily-summary` | Daily summary report |
+| `/api/health` | System health status |
 
 ---
 
-## 3. Cảnh báo Telegram / Telegram Alerts
+## 3. Telegram Alerts
 
-### 3.1 Cài đặt Telegram / Setup
+### 3.1 Setup
 
-Sau khi hệ thống được cài đặt, bạn sẽ nhận tin nhắn Telegram khi có sự kiện quan trọng.
+After the system is installed, you will receive Telegram messages for important events. Your installer will configure the Telegram bot for you.
 
-After setup, you will receive Telegram messages for important events.
+### 3.2 Alert Levels
 
-### 3.2 Các mức cảnh báo / Alert Levels
-
-| Mức / Level | Biểu tượng / Icon | Ý nghĩa / Meaning | Ví dụ / Example |
+| Level | Icon | Meaning | Example |
 |---|---|---|---|
-| ℹ️ THÔNG BÁO / INFO | ℹ️ | Cập nhật thường xuyên / Regular update | Báo cáo buổi sáng, trạng thái hệ thống |
-| ⚠️ CẢNH BÁO / WARNING | ⚠️ | Bất thường cần chú ý / Needs attention | Không hoạt động > 2 giờ, nhịp thở bất thường |
-| 🚨 KHẨN CẤP / EMERGENCY | 🚨 | Nguy hiểm — hành động ngay / Act immediately | Phát hiện té ngã, không cử động sau té |
+| INFO | ℹ️ | Regular update | Morning report, system status |
+| WARNING | ⚠️ | Needs attention | Inactivity over 2 hours, abnormal breathing |
+| EMERGENCY | 🚨 | Act immediately | Fall detected, no movement after fall |
 
-### 3.3 Ví dụ tin nhắn / Example Message
+### 3.3 Example Message
 
 ```
-🚨 KHẨN CẤP
-📍 Khu vực: Phòng ngủ
-⏰ Thời gian: 14:30:25 25/05/2026
-📋 Sự kiện: Phát hiện té ngã! (độ tin cậy: 92%)
+🚨 EMERGENCY
+📍 Zone: Bedroom
+⏰ Time: 14:30:25 25/05/2026
+📋 Event: Fall detected! (confidence: 92%)
 ```
 
 ---
 
-## 4. Hiểu các chỉ số / Understanding Metrics
+## 4. Understanding Metrics
 
-### 4.1 Nhịp thở / Respiration
+### 4.1 Respiration
 
-| Phạm vi / Range | Đánh giá / Assessment |
+| Range | Assessment |
 |---|---|
-| 12-20 nhịp/phút / BPM | ✅ Bình thường / Normal |
-| 8-11 hoặc 21-25 | ⚠️ Hơi bất thường / Slightly abnormal |
-| < 8 hoặc > 25 | 🚨 Bất thường — kiểm tra ngay / Check immediately |
+| 12–20 BPM | ✅ Normal |
+| 8–11 or 21–25 | ⚠️ Slightly abnormal |
+| < 8 or > 25 | 🚨 Abnormal — check immediately |
 
-### 4.2 Điểm giấc ngủ / Sleep Score
+### 4.2 Sleep Score
 
-| Điểm / Score | Đánh giá / Assessment |
+| Score | Assessment |
 |---|---|
-| 80-100 | ✅ Rất tốt / Excellent |
-| 60-79 | ✅ Tốt / Good |
-| 40-59 | ⚠️ Trung bình / Average |
-| < 40 | ❌ Kém — cần cải thiện / Needs improvement |
+| 80–100 | ✅ Excellent |
+| 60–79 | ✅ Good |
+| 40–59 | ⚠️ Average |
+| < 40 | ❌ Poor — needs improvement |
 
-Điểm giấc ngủ dựa trên: thời gian ngủ sâu, thời gian ngủ nông, thời gian thức, và sự ổn định nhịp thở.
+The sleep score is based on: deep sleep time, light sleep time, awake time, and breathing regularity.
 
-The sleep score considers: deep sleep time, light sleep time, awake time, and breathing regularity.
+### 4.3 Activity Level
 
-### 4.3 Mức độ hoạt động / Activity Level
-
-| Trạng thái / State | Ý nghĩa / Meaning |
+| State | Meaning |
 |---|---|
-| Hoạt động / Active | Đang di chuyển / Moving around |
-| Nghỉ ngơi / Still | Ngồi hoặc nằm yên, có thở / Sitting or lying still, breathing |
-| Không hoạt động / Inactivity | Đứng yên hoàn toàn — kiểm tra nếu > 2 giờ / Completely still — check if > 2 hours |
+| Active | Moving around |
+| Still | Sitting or lying still, breathing normally |
+| Inactivity | Completely still — check if over 2 hours |
 
 ---
 
-## 5. Báo cáo hàng ngày / Daily Report
-
-Mỗi sáng lúc 7:00, hệ thống gửi báo cáo qua Telegram (nếu đã cấu hình).
+## 5. Daily Report
 
 Every morning at 7:00 AM, the system sends a summary via Telegram (if configured).
 
-Báo cáo bao gồm / Report includes:
-- 🌙 **Đêm qua**: điểm giấc ngủ, tỉ lệ ngủ sâu/nông/thức
-- 📋 **Trạng thái hiện tại**: hoạt động, nhịp thở, nhịp tim
-- 🔔 **Cảnh báo 24 giờ**: số lượng và chi tiết
-- 💡 **Khuyến nghị**: lời khuyên sức khỏe hàng ngày
+The report includes:
+- 🌙 **Last night**: sleep score, deep/light/awake breakdown
+- 📋 **Current status**: activity state, respiration, heart rate
+- 🔔 **24-hour alerts**: counts by level and details
+- 💡 **Daily advice**: health recommendations
 
 ---
 
-## 6. Xử lý khi có cảnh báo / Responding to Alerts
+## 6. Responding to Alerts
 
-### 🚨 KHẨN CẤP (EMERGENCY) — Té ngã
-1. **Gọi điện ngay** cho người được giám sát
-2. Nếu không trả lời, **đến kiểm tra trực tiếp** hoặc gọi hàng xóm
-3. Nếu có chấn thương, **gọi cấp cứu 115**
-4. Sau sự kiện, đưa người cao tuổi đi khám bác sĩ (có thể có chấn thương bên trong)
+### 🚨 EMERGENCY — Fall Detected
+1. **Call the monitored person immediately**
+2. If no answer, **go check in person** or call a neighbor
+3. If injured, **call emergency services**
+4. After the event, have the person see a doctor (internal injuries may not be visible)
 
-### ⚠️ CẢNH BÁO (WARNING) — Không hoạt động
-1. Gọi điện kiểm tra
-2. Nếu người cao tuổi vẫn bình thường (đang đọc sách, xem TV) — không cần lo
-3. Nếu không trả lời sau 3 lần gọi — đến kiểm tra
+### ⚠️ WARNING — Prolonged Inactivity
+1. Call to check on them
+2. If they are fine (reading, watching TV) — no need to worry
+3. If no answer after 3 calls — go check in person
 
-### ℹ️ THÔNG BÁO (INFO)
-- Không cần hành động khẩn cấp
-- Đọc báo cáo hàng ngày để nắm tình hình
+### ℹ️ INFO
+- No urgent action needed
+- Read the daily report to stay informed
 
 ---
 
-## 7. Câu hỏi thường gặp / FAQ
+## 7. FAQ
 
-### Hệ thống có xem được hình ảnh không?
-**Không.** ElderCare chỉ đọc sóng WiFi, không có camera. Hệ thống không thể nhìn thấy hình ảnh hay video.
-
+### Does the system use cameras?
 **No.** ElderCare only reads WiFi signals. There are no cameras. The system cannot see images or video.
 
-### Người cao tuổi có cần đeo thiết bị gì không?
-**Không.** Hệ thống hoạt động hoàn toàn không cần thiết bị đeo.
-
+### Does the person need to wear a device?
 **No.** The system requires no wearable devices at all.
 
-### Dữ liệu có bị gửi lên mạng không?
-**Không.** Tất cả dữ liệu được xử lý trên máy chủ tại nhà. Không có kết nối đám mây.
-
+### Is data sent to the cloud?
 **No.** All data is processed on the local home server. There is no cloud connection.
 
-### Nếu WiFi bị mất thì sao?
-Hệ thống sẽ không hoạt động cho đến khi WiFi được khôi phục. ESP32 sẽ tự động kết nối lại.
+### What happens if WiFi goes down?
+The system stops working until WiFi is restored. The ESP32 boards will reconnect automatically.
 
-The system will stop working until WiFi is restored. The ESP32 boards will reconnect automatically.
-
-### Có cần thay pin cho ESP32 không?
-ESP32 được cấp nguồn qua USB. Cắm vào nguồn điện liên tục.
-
+### Do ESP32 boards need batteries?
 ESP32 boards are USB-powered. Keep them plugged in continuously.
 
-### Tôi cần bảo trì gì?
-- Kiểm tra đèn ESP32 còn sáng (1 lần/tuần)
-- Kiểm tra dashboard còn truy cập được
-- Không cần bảo trì phần mềm — hệ thống tự chạy
+### What maintenance is required?
+- Check that the ESP32 indicator lights are on (once per week)
+- Verify the dashboard is accessible
+- No software maintenance needed — the system runs on its own
