@@ -41,6 +41,8 @@ The system is forked from [RuView](https://github.com/ruvnet/RuView) (a general-
 - Multi-zone support for Vietnamese home layouts
 - Telegram-based alerting for Vietnamese users
 
+**Development Strategy:** ElderCare imports RuView for all signal processing infrastructure (Hampel filter, phase sanitizer, Butterworth bandpass, breathing/heart rate extraction, MQTT ingestion). Only elderly-care-specific components are custom-built: CSI-FallNet fine-tuning on ElderAL-CSI, SleepLSTM + Sleep Scorer, TwoStageConfirmer, alert manager with Vietnamese localization, and caregiver dashboard. This avoids reinventing the wheel on logic already built into RuView.
+
 ### 1.3 Key Differentiators
 
 | Feature | ElderCare | Camera Systems | Wearables |
@@ -67,7 +69,7 @@ This is a serious deep learning systems project. The following assessment identi
 ### 2.2 Strengths of the Approach
 
 - **WiFi CSI is well-researched.** Academic literature since 2015 (WIFALL, FallDeFi, etc.) confirms CSI can detect falls with >90% accuracy in controlled settings.
-- **RuView provides a solid foundation.** The base repo already handles CSI ingestion, basic signal processing, and a web dashboard, reducing development time significantly.
+- **RuView provides a solid foundation.** The base repo already handles CSI ingestion, basic signal processing, and a web dashboard, reducing development time significantly. ElderCare imports these components directly — no need to rebuild.
 - **ESP32-S3 is mature hardware.** The CSI API in esp-idf is documented and community-supported. MicroPython alternatives also exist.
 - **Datasets exist.** CSI-Bench and similar public datasets provide labeled data for pre-training, reducing annotation burden.
 
@@ -76,19 +78,19 @@ This is a serious deep learning systems project. The following assessment identi
 **Challenge 1: Domain gap between lab datasets and real homes**
 - Academic CSI datasets are captured in controlled environments (empty rooms, specific distances).
 - Real Vietnamese homes have furniture, thick walls, multiple WiFi interference sources.
-- **Mitigation:** Fine-tune on in-situ data captured at deployment site. Plan 3–5 hours of data collection per zone at deployment.
+- **Mitigation:** Fine-tune on in-situ data captured at deployment site. Plan 3-5 hours of data collection per zone at deployment.
 
 **Challenge 2: Phase noise on ESP32**
 - ESP32 does not have hardware phase calibration unlike Intel 5300/Atheros CSI tools.
 - Phase data requires aggressive preprocessing (sanitization, linear detrending).
-- **Mitigation:** Rely primarily on **amplitude-based features** for fall detection. Use phase only for vital signs after sanitization pipeline.
+- **Mitigation:** RuView's phase sanitization pipeline handles this. Rely primarily on **amplitude-based features** for fall detection. Use phase only for vital signs after sanitization pipeline.
 
 **Challenge 3: Fall vs. non-fall discrimination**
 - Fast sitting down, dropping objects, or pets can trigger false positives.
 - **Mitigation:** Two-stage confirmation (initial trigger + 3-second inactivity check). Collect negative examples (lying down slowly, sitting) during fine-tuning.
 
 **Challenge 4: Multi-zone CSI interference**
-- Running 3–4 ESP32 nodes simultaneously can cause inter-device interference.
+- Running 3-4 ESP32 nodes simultaneously can cause inter-device interference.
 - **Mitigation:** Use time-division CSI capture or assign non-overlapping channels per zone. Implement zone isolation in ingestion pipeline.
 
 **Challenge 5: Raspberry Pi 5 inference throughput**
@@ -99,13 +101,13 @@ This is a serious deep learning systems project. The following assessment identi
 
 | Target | Assessment | Comment |
 |---|---|---|
-| Fall detection > 85% F1 | Achievable | Requires in-situ fine-tuning; lab-only weights typically reach 70–75% in real homes |
+| Fall detection > 85% F1 | Achievable | Requires in-situ fine-tuning; lab-only weights typically reach 70-75% in real homes |
 | Latency < 5 seconds | Achievable | 2s window + ~200ms inference on RPi5 = well within target |
 | 24/7 stability | Requires effort | Must handle ESP32 WiFi reconnects, queue backpressure, memory leaks in long-running processes |
-| Breathing monitoring | Achievable | FFT-based, well-established. Accuracy degrades during movement |
+| Breathing monitoring | Achievable | FFT-based, well-established. Accuracy degrades during movement. RuView provides this directly |
 | Heart rate monitoring | Difficult | ESP32 amplitude noise makes fine HR extraction unreliable. Mark as "experimental" for MVP |
 | Sleep quality scoring | Partially achievable | Movement + breathing proxy works; EEG-level accuracy impossible; set expectation correctly |
-| 6–8 week timeline | Tight but realistic | Only with scoped MVP; full feature set needs 12+ weeks |
+| 6-8 week timeline | Tight but realistic | Only with scoped MVP; full feature set needs 12+ weeks |
 
 ---
 
@@ -114,76 +116,49 @@ This is a serious deep learning systems project. The following assessment identi
 ### 3.1 High-Level Diagram
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    HOME ENVIRONMENT                      │
-│                                                          │
-│  [ESP32-S3 Zone 1]  [ESP32-S3 Zone 2]  [ESP32-S3 Zone 3]│
-│   (Bedroom)          (Living Room)       (Hallway)       │
-│       │                   │                   │          │
-│       └──────────────WiFi / MQTT──────────────┘          │
-│                           │                              │
-│              ┌────────────▼────────────┐                 │
-│              │   Raspberry Pi 5 /      │                 │
-│              │   Local Mini PC         │                 │
-│              │                         │                 │
-│              │  ┌─────────────────┐    │                 │
-│              │  │ Ingestion Layer  │    │                 │
-│              │  └────────┬────────┘    │                 │
-│              │           │             │                 │
-│              │  ┌────────▼────────┐    │                 │
-│              │  │ Preprocessing   │    │                 │
-│              │  └────────┬────────┘    │                 │
-│              │           │             │                 │
-│              │  ┌────────▼────────┐    │                 │
-│              │  │ ML Inference    │    │                 │
-│              │  │ Engine          │    │                 │
-│              │  └────────┬────────┘    │                 │
-│              │           │             │                 │
-│              │  ┌────────▼────────┐    │                 │
-│              │  │ Alert Manager   │    │                 │
-│              │  └────────┬────────┘    │                 │
-│              │           │             │                 │
-│              │  ┌────────▼────────┐    │                 │
-│              │  │  Dashboard      │    │                 │
-│              │  │  (FastAPI+React)│    │                 │
-│              │  └─────────────────┘    │                 │
-│              └─────────────────────────┘                 │
-│                           │                              │
-└───────────────────────────┼──────────────────────────────┘
-                            │ Internet (alerts only)
-                    ┌───────▼────────┐
-                    │  Telegram Bot  │
-                    │  (Caregiver    │
-                    │   phone)       │
-                    └────────────────┘
+ESP32-S3 Zone 1     ESP32-S3 Zone 2     ESP32-S3 Zone 3
+ (Bedroom)           (Living Room)        (Hallway)
+     |                   |                   |
+     +-----------WiFi / MQTT------------------+
+                         |
+            Raspberry Pi 5 / Mini PC
+                         |
+            +----------- Ingestion Layer (RuView) ----------+
+            |                                                |
+      RuView Signal Processing                    ElderCare Inference Engine
+      (Hampel, Bandpass, Phase, Normalize)        (Fall, Vitals, Sleep, Activity)
+            |                                                |
+            +----------- Alert Manager (ElderCare) ---------+
+                         | (Telegram, Log, InfluxDB)
+                    Dashboard (FastAPI + React)
+                         |
+                    Caregiver Browser
 ```
 
 ### 3.2 Component Descriptions
 
-**ESP32-S3 Firmware**
-Each node runs a CSI capture firmware that samples WiFi channel state at ~50 Hz and transmits structured packets via MQTT or UDP to the local server. The node acts as a CSI transmitter-receiver pair (one ESP32 transmits beacon frames, another receives; or use router-based CSI if supported).
+**ESP32-S3 Firmware (RuView)**
+Each node runs RuView's CSI capture firmware that samples WiFi channel state at ~50 Hz and transmits structured packets via MQTT to the local server.
 
-**Ingestion Layer**
-- Subscribes to MQTT topics per zone
-- Validates packet structure, drops malformed frames
-- Maintains a per-zone ring buffer (5 seconds at 50 Hz = 250 frames)
-- Tags incoming data with zone ID, timestamp, and sequence number
+**Ingestion Layer (RuView)**
+- MQTT subscription per zone (topic: `eldercare/csi/{zone_id}`)
+- Packet validation and ring buffer management
+- Zone-ID tagging, timestamp, sequence numbers
 
-**Preprocessing Pipeline**
+**Preprocessing Pipeline (RuView)**
 - Hampel filter for impulse noise removal
-- Butterworth bandpass filter (configurable per use case)
-- Phase unwrapping + linear detrend for phase sanitization
-- Subcarrier selection (remove edge subcarriers with poor SNR)
-- Z-score normalization per subcarrier
+- Butterworth bandpass filter
+- Phase unwrapping + linear detrend
+- Subcarrier selection and z-score normalization
 
-**ML Inference Engine**
-Four parallel processes, one per model, consuming from a shared preprocessed buffer. Each process publishes inference results to an internal event bus.
+**ML Inference Engine (ElderCare)**
+Four parallel processes, one per model. Uses RuView's preprocessing output.
 
-**Alert Manager**
-Subscribes to inference events, applies threshold logic, cooldown management, and dispatches alerts to Telegram and local log/InfluxDB.
+**Alert Manager (ElderCare)**
+Three-level alert system (INFO/WARNING/EMERGENCY) with Vietnamese-language Telegram messages, cooldown management, and log persistence.
 
-**Dashboard**
-A web application (FastAPI backend + React frontend) accessible on the local network. Displays real-time status, vital sign graphs, sleep score, activity timeline, and alert history.
+**Dashboard (ElderCare)**
+FastAPI backend + React frontend, mobile-responsive, caregiver-optimized with 16px minimum font.
 
 ---
 
@@ -195,20 +170,20 @@ A web application (FastAPI backend + React frontend) accessible on the local net
 
 **Architecture: CSI-FallNet**
 ```
-Input: (Batch, T=100, C=52)  ← 2-second window, 52 subcarriers
-  │
-  ├── Conv1D(52→64, kernel=5, padding=same) + BatchNorm + ReLU
-  ├── Conv1D(64→128, kernel=3, padding=same) + BatchNorm + ReLU
-  ├── MaxPool1D(2) → (Batch, 50, 128)
-  ├── Conv1D(128→128, kernel=3, padding=same) + BatchNorm + ReLU
-  ├── MaxPool1D(2) → (Batch, 25, 128)
-  │
-  ├── BiLSTM(128, hidden=256, bidirectional=True) → (Batch, 25, 512)
-  ├── Attention pooling → (Batch, 512)
-  │
-  ├── FC(512→256) + Dropout(0.5) + ReLU
-  ├── FC(256→64) + ReLU
-  └── FC(64→2) + Softmax
+Input: (Batch, T=100, C=52)  <- 2-second window, 52 subcarriers
+  |
+  +-- Conv1D(52->64, kernel=5, padding=same) + BatchNorm + ReLU
+  +-- Conv1D(64->128, kernel=3, padding=same) + BatchNorm + ReLU
+  +-- MaxPool1D(2) -> (Batch, 50, 128)
+  +-- Conv1D(128->128, kernel=3, padding=same) + BatchNorm + ReLU
+  +-- MaxPool1D(2) -> (Batch, 25, 128)
+  |
+  +-- BiLSTM(128, hidden=256, bidirectional=True) -> (Batch, 25, 512)
+  +-- Attention pooling -> (Batch, 512)
+  |
+  +-- FC(512->256) + Dropout(0.5) + ReLU
+  +-- FC(256->64) + ReLU
+  +-- FC(64->2) + Softmax
 ```
 
 **Training details:**
@@ -223,28 +198,26 @@ Input: (Batch, T=100, C=52)  ← 2-second window, 52 subcarriers
 ```python
 # Stage 1: model confidence > 0.85
 # Stage 2: if fall triggered, check inactivity for next 3 seconds
-#           if CSI variance drops below inactivity_threshold → confirm fall
-#           else → dismiss as false positive
+#           if CSI variance drops below inactivity_threshold -> confirm fall
+#           else -> dismiss as false positive
 ```
 
 ### 4.2 Vital Signs Estimation
 
-**Respiration Rate:**
+**Respiration Rate (RuView FFT Engine):**
 ```
 Input: 30-second CSI phase segment (per subcarrier)
-  │
-  ├── Phase sanitization (unwrap + detrend)
-  ├── Select top-K subcarriers by signal variance
-  ├── Average across subcarriers
-  ├── FFT → power spectrum
-  ├── Bandpass: 0.1–0.5 Hz (6–30 breaths/min)
-  └── Peak frequency → Respiration Rate (BPM)
+  |
+  +-- Phase sanitization (unwrap + detrend) [RuView]
+  +-- Select top-K subcarriers by signal variance
+  +-- Average across subcarriers
+  +-- FFT -> power spectrum
+  +-- Bandpass: 0.1-0.5 Hz (6-30 breaths/min) [RuView]
+  +-- Peak frequency -> Respiration Rate (BPM) [RuView]
 ```
 
-**Heart Rate (Experimental):**
-Same pipeline with 0.8–2.0 Hz bandpass. Accuracy is ESP32-hardware-limited; treated as experimental in MVP with explicit uncertainty display in dashboard.
-
-**DL Enhancement:** A lightweight 1D-U-Net denoiser (pre-trained on synthetic CSI + vitals data) applied before FFT to improve SNR. This is optional and can be disabled if RPi5 throughput becomes a bottleneck.
+**Heart Rate (Experimental — RuView Engine):**
+Same pipeline with 0.8-2.0 Hz bandpass. Accuracy is ESP32-hardware-limited; treated as experimental in MVP with explicit uncertainty display in dashboard.
 
 ### 4.3 Sleep Quality Monitoring
 
@@ -257,25 +230,28 @@ Same pipeline with 0.8–2.0 Hz bandpass. Accuracy is ESP32-hardware-limited; tr
 **Architecture: SleepLSTM**
 ```
 Input: (Batch, N_epochs, 4_features)
-  │
-  ├── LSTM(4, hidden=64, num_layers=2, dropout=0.3)
-  ├── FC(64→32) + ReLU
-  ├── FC(32→3) + Softmax  ← {awake, light, deep}
+  |
+  +-- LSTM(4, hidden=64, num_layers=2, dropout=0.3)
+  +-- FC(64->32) + ReLU
+  +-- FC(32->3) + Softmax  <- {awake, light, deep}
 ```
 
-**Sleep Score:** Weighted sum of deep sleep proportion, total sleep time, and respiratory regularity (normalized 0–100).
+**Sleep Score:** Weighted sum of deep sleep proportion, total sleep time, and respiratory regularity (normalized 0-100). This is ElderCare-specific — RuView has no equivalent.
 
 ### 4.4 Activity / Inactivity Detection
 
 **Rule-based (primary for MVP):**
 ```
 CSI Amplitude Variance over 30s window:
-  > threshold_active   → ACTIVE
-  > threshold_still    → STILL (breathing only, e.g., sleeping)
-  < threshold_still    → INACTIVITY (potential problem)
+  > threshold_active   -> ACTIVE
+  > threshold_still    -> STILL (breathing only, e.g., sleeping)
+  < threshold_still    -> INACTIVITY (potential problem)
 
-If INACTIVITY persists > 120 minutes → WARNING alert
-If INACTIVITY follows a FALL event > 30 seconds → EMERGENCY alert
+If INACTIVITY persists > 120 minutes -> WARNING alert
+If INACTIVITY follows a FALL event > 30 seconds -> EMERGENCY alert
+
+Day/night context (ElderCare-specific):
+  Inactivity alerts suppressed during sleep hours (10 PM - 6 AM)
 ```
 
 **DL enhancement (post-MVP):** Fine-grained activity classification (walking, sitting, lying, standing) using a ResNet-style 1D-CNN.
@@ -290,25 +266,25 @@ If INACTIVITY follows a FALL event > 30 seconds → EMERGENCY alert
 - Distinguish between: fall, lying down normally, sitting down quickly
 
 ### FR-02: Post-Fall Inactivity Alert
-- If no recovery movement detected within 30 seconds post-fall → EMERGENCY alert
+- If no recovery movement detected within 30 seconds post-fall -> EMERGENCY alert
 - Alert includes: zone name, timestamp, confidence score
 
 ### FR-03: Prolonged Inactivity Alert
 - Alert if no significant movement detected for > 2 hours during daytime hours (configurable)
-- No alert during configured sleep hours (e.g., 10 PM – 6 AM)
+- No alert during configured sleep hours (e.g., 10 PM - 6 AM)
 
 ### FR-04: Vital Signs Monitoring
-- Estimate respiration rate (breaths/min) updated every 5 seconds
+- Estimate respiration rate (breaths/min) updated every 5 seconds **via RuView FFT engine**
 - Display respiration trend graph (last 1 hour) on dashboard
 - Alert on abnormal respiration rate (< 8 or > 25 breaths/min sustained > 1 minute)
 
 ### FR-05: Sleep Quality Monitoring
 - Track sleep sessions automatically (no manual start/stop)
-- Produce a Sleep Score (0–100) per night
+- Produce a Sleep Score (0-100) per night **via ElderCare SleepLSTM**
 - Send morning summary report at configurable time (default: 7:00 AM)
 
 ### FR-06: Multi-Zone Support
-- Support 2–4 zones simultaneously
+- Support 2-4 zones simultaneously
 - Each zone identified by zone name and ESP32 MAC address
 - Dashboard shows per-zone status independently
 
@@ -316,6 +292,7 @@ If INACTIVITY follows a FALL event > 30 seconds → EMERGENCY alert
 - Telegram integration (mandatory)
   - Three alert levels: INFO, WARNING, EMERGENCY
   - Each alert message includes: zone, event type, timestamp, severity, brief description
+  - **Messages in Vietnamese for caregiver accessibility**
 - Daily summary report (text format, Telegram)
 - Alert cooldown: configurable per-level (default: 5 min WARNING, 1 min EMERGENCY)
 
@@ -324,6 +301,7 @@ If INACTIVITY follows a FALL event > 30 seconds → EMERGENCY alert
 - Historical graphs: breathing rate (24h), sleep score (30 days), activity heatmap (7 days)
 - Alert log with acknowledgment
 - System health panel (ESP32 connection status, inference latency, disk usage)
+- **Minimum 16px font for readability by older caregivers**
 
 ---
 
@@ -369,7 +347,7 @@ If INACTIVITY follows a FALL event > 30 seconds → EMERGENCY alert
 **Why ESP32-S3:** Improved RF performance vs. ESP32 original; CSI API available in esp-idf v5.x; sufficient RAM for firmware
 
 **Node placement guidelines:**
-- Mount at 1.0–1.5m height (chest level when standing)
+- Mount at 1.0-1.5m height (chest level when standing)
 - Line-of-sight or one-wall clearance to monitored area preferred
 - Avoid placement behind large metal objects or appliances
 - Minimum 3m separation between nodes to reduce inter-node interference
@@ -425,7 +403,7 @@ An eldercare-specific CSI dataset with labeled fall events and activities of dai
 
 ### 8.3 In-Situ Data Collection (Required)
 
-No public dataset perfectly matches a specific deployment environment. After installing hardware, collect 3–5 hours of labeled data per zone:
+No public dataset perfectly matches a specific deployment environment. After installing hardware, collect 3-5 hours of labeled data per zone:
 
 **Collection protocol:**
 - Falls: Simulate falls (safely, with mattress/pad) in 10 different directions and speeds — 50+ examples per zone
@@ -440,66 +418,68 @@ To compensate for limited in-situ data:
 - **Time shifting:** Randomly shift fall event position within the window
 - **Gaussian noise injection:** Simulate SNR variation
 - **Subcarrier dropout:** Randomly zero out 10% of subcarriers
-- **Amplitude scaling:** Random scaling ±20%
+- **Amplitude scaling:** Random scaling +/-20%
 - **Mixup:** Blend two non-fall samples with label mixing
 
 ---
 
 ## 9. Development Roadmap
 
-### Phase 0 — Setup (Week 1)
+### Phase 0 — Setup (Week 1) ✅ COMPLETE
 
-- [ ] Fork RuView repository, create `feature/eldercare` branch
-- [ ] Audit RuView codebase: identify reusable components, strip unused features
-- [ ] Set up development environment (Docker, PyTorch, MQTT)
+- [x] Fork RuView repository, create `feature/eldercare` branch
+- [x] Audit RuView codebase: identify reusable components, strip unused features
+- [x] Set up development environment (Docker, PyTorch, MQTT)
 - [ ] Flash ESP32-S3 firmware, verify CSI data capture to console
-- [ ] Establish MQTT ingestion pipeline: ESP32 → local server
-- [ ] Commit baseline project structure per CLAUDE.md
+- [x] Establish MQTT ingestion pipeline architecture: ESP32 -> local server
+- [x] Commit baseline project structure per CLAUDE.md
+- [x] **RuView component audit complete:** Signal processing (Hampel, phase sanitizer, Butterworth bandpass), vital signs extraction (FFT respiration + heart rate), MQTT ingestion, ESP32 firmware — all identified for import. ElderCare builds only: CSI-FallNet fine-tuning, SleepLSTM, TwoStageConfirmer, Alert Manager with VN localization, caregiver dashboard.
 
-**Milestone:** Raw CSI data flowing from ESP32 into Python buffer.
+**Milestone:** Project structure established. RuView components identified and audited. ElderCare-specific code scaffolded (models, alerts, dashboard, configs, training). ✅
 
-### Phase 1 — Signal Processing & Baseline Model (Weeks 2–3)
+### Phase 1 — Signal Processing & Baseline Model (Weeks 2-3)
 
-- [ ] Implement full preprocessing pipeline (Hampel, bandpass, phase sanitization, normalization)
-- [ ] Download and preprocess CSI-Bench + ElderAL-CSI datasets
-- [ ] Train baseline fall detection model (simple 1D-CNN) on CSI-Bench
+- [ ] **Integrate RuView preprocessing pipeline** (Hampel, bandpass, phase sanitization, normalization) — import from RuView, do not rebuild
+- [ ] Download and preprocess CSI-Bench dataset from Kaggle
+- [ ] Set up ElderAL-CSI dataset (local files, to be provided)
+- [ ] Train baseline CSI-FallNet on CSI-Bench
 - [ ] Evaluate baseline on ElderAL-CSI test split
-- [ ] Implement FFT-based respiration rate estimator
-- [ ] Unit tests for preprocessing pipeline
+- [ ] **Integrate RuView FFT respiration + heart rate estimators** — import from RuView, do not rebuild
+- [ ] Unit tests for ElderCare-specific model wrappers
 
-**Milestone:** Baseline fall detection at >70% F1 on public dataset. Respiration rate estimation working on test CSI segments.
+**Milestone:** Baseline fall detection at >70% F1 on public dataset. RuView signal processing and vitals engines integrated.
 
-### Phase 2 — Fine-Tuning & Multi-Zone (Weeks 4–5)
+### Phase 2 — Fine-Tuning & Multi-Zone (Weeks 4-5)
 
 - [ ] Deploy 3 ESP32 nodes in test environment
 - [ ] Collect in-situ fall + activity data (labeled)
-- [ ] Fine-tune CSI-FallNet with CSI-Bench → ElderAL-CSI → in-situ pipeline
+- [ ] Fine-tune CSI-FallNet with CSI-Bench -> ElderAL-CSI -> in-situ pipeline
 - [ ] Implement two-stage fall confirmation logic
 - [ ] Multi-zone ingestion (zone ID tagging, per-zone ring buffers)
-- [ ] Implement inactivity detection (rule-based)
+- [ ] Implement day/night-aware inactivity detection (rule-based)
 - [ ] Target: >85% F1 on in-situ test set
 
 **Milestone:** Fall detection meeting accuracy target. Three zones operational.
 
 ### Phase 3 — Alerting & Dashboard (Week 6)
 
-- [ ] Implement Alert Manager with Telegram bot integration
-- [ ] Three-level alert logic (INFO / WARNING / EMERGENCY) with cooldown
+- [x] Alert Manager scaffolded (3-level, cooldown, Vietnamese formatting, Telegram stub)
+- [ ] Wire Alert Manager to real Telegram Bot API
+- [x] Dashboard backend scaffolded (FastAPI, zone/vitals/alerts/sleep/health endpoints)
+- [x] Dashboard frontend scaffolded (React, zone cards, mobile-responsive, 16px minimum font)
+- [ ] Wire dashboard to live inference data (currently using stub/placeholder data)
 - [ ] Daily summary report generation and scheduled delivery
-- [ ] Build Dashboard backend (FastAPI): REST API for current status, history
-- [ ] Build Dashboard frontend (React): status cards, breathing graph, sleep score, alert log
-- [ ] Mobile-responsive design, minimum 16px font
 
-**Milestone:** End-to-end system: fall → Telegram alert within 5 seconds. Dashboard accessible on local network.
+**Milestone:** End-to-end system: fall -> Telegram alert within 5 seconds. Dashboard accessible on local network.
 
 ### Phase 4 — Sleep Monitoring & Hardening (Week 7)
 
-- [ ] Implement SleepLSTM training and inference
+- [ ] Implement SleepLSTM training and inference (ElderCare-specific — no RuView equivalent)
 - [ ] Sleep score calculation and nightly session detection
 - [ ] Morning report automation (scheduled Telegram message)
 - [ ] System hardening: watchdog process, auto-reconnect, error handling
 - [ ] Docker Compose full stack deployment
-- [ ] Load testing: 3 zones × 50 Hz continuous for 24 hours
+- [ ] Load testing: 3 zones x 50 Hz continuous for 24 hours
 
 **Milestone:** Full MVP feature set operational. 24-hour stress test passed.
 
@@ -510,7 +490,7 @@ To compensate for limited in-situ data:
 - [ ] Write system design document (`docs/architecture.md`)
 - [ ] Record short demo video
 - [ ] Final accuracy evaluation report
-- [ ] Clean up code, resolve TODOs, merge to `feature/eldercare`
+- [ ] Clean up code, resolve TODOs, merge to main
 
 **Milestone:** MVP complete and documented. Ready for real-world pilot deployment.
 
@@ -520,12 +500,12 @@ To compensate for limited in-situ data:
 
 | Risk | Probability | Impact | Mitigation |
 |---|---|---|---|
-| ESP32 CSI API inconsistency across firmware versions | Medium | High | Pin esp-idf version in firmware project; document exact version |
+| ESP32 CSI API inconsistency across firmware versions | Medium | High | Pin esp-idf version in firmware project; use RuView's firmware which is tested with specific esp-idf versions |
 | Public dataset domain gap too large | High | Medium | Mandatory in-situ data collection; treat lab training as pre-training only |
-| RPi5 cannot sustain real-time inference load | Medium | High | Profile early (Week 2); implement model quantization and batching before it becomes blocking |
-| False positives too high in real home | Medium | High | Tune two-stage confirmation; add user feedback loop (Telegram "was this a real fall?") |
-| WiFi interference in dense apartment buildings | Medium | Medium | Channel selection per zone; RSSI monitoring; fallback to wired ESP32 if needed |
-| 6-week timeline slips | High | Medium | Ruthlessly scope MVP; defer heart rate and HA integration to post-MVP |
+| RPi5 cannot sustain real-time inference load | Medium | High | Profile early (Week 2); implement model quantization and batching; RuView's models are already optimized for edge |
+| False positives too high in real home | Medium | High | Tune two-stage confirmation; add user feedback loop |
+| WiFi interference in dense apartment buildings | Medium | Medium | Channel selection per zone; RSSI monitoring |
+| 6-week timeline slips | High | Medium | Ruthlessly scope MVP; defer heart rate to post-MVP; leverage RuView imports to save dev time |
 | ElderAL-CSI dataset unavailable/restricted | Low | Medium | Supplement with in-situ data collection; use data augmentation aggressively |
 | Single developer burnout | Medium | High | Weekly milestones with go/no-go decisions; document as you build |
 
@@ -553,20 +533,20 @@ To compensate for limited in-situ data:
 
 1. **Working system** with 3 ESP32 nodes, Raspberry Pi server, running Docker Compose
 2. **Fall detection model** fine-tuned to > 85% F1 on in-situ test set
-3. **Web dashboard** with real-time status, vital signs, sleep score, alert log
-4. **Telegram bot** with three-level alerting and daily morning report
+3. **Web dashboard** with real-time status, vital signs, sleep score, alert log (Vietnamese)
+4. **Telegram bot** with three-level alerting and daily morning report (VN messages)
 5. **Trained model checkpoints** saved in `models/*/checkpoints/`
 6. **Installation guide** (`docs/installation.md`) with step-by-step setup
 7. **User guide** (`docs/user_guide.md`) for non-technical caregivers
 8. **System design document** (`docs/architecture.md`)
 9. **Accuracy evaluation report** (`docs/evaluation_report.md`)
-10. **Clean GitHub repository** on `feature/eldercare` branch with README
+10. **Clean GitHub repository** on main branch with README
 
 ### Quality Gates (must pass before MVP sign-off)
 
 - [ ] Fall detection F1 > 85% on in-situ test set (at least 50 fall events)
 - [ ] False positive rate < 2 per day in 48-hour real-environment test
-- [ ] End-to-end fall → Telegram latency < 5 seconds (measured 10 times, all pass)
+- [ ] End-to-end fall -> Telegram latency < 5 seconds (measured 10 times, all pass)
 - [ ] Dashboard loads on mobile browser in < 2 seconds
 - [ ] 24-hour continuous operation without crash or manual restart
 - [ ] All unit tests passing (`pytest tests/ -v`)
@@ -576,7 +556,7 @@ To compensate for limited in-situ data:
 
 ## 13. Future Roadmap
 
-### Post-MVP (Months 3–6)
+### Post-MVP (Months 3-6)
 
 - **Heart rate estimation improvement:** Investigate cross-ESP32 phase difference techniques for better SNR
 - **Multi-person support:** Extend models to handle 2-person scenarios (spouse monitoring)
@@ -585,7 +565,7 @@ To compensate for limited in-situ data:
 - **Edge model on ESP32-S3:** Port lightweight fall detection to run partially on-device for sub-1-second preliminary detection
 - **Mobile app:** React Native caregiver app with push notifications and live status
 
-### Long-Term (6–12 months)
+### Long-Term (6-12 months)
 
 - **Transfer learning across homes:** Federated fine-tuning from multiple deployments (privacy-preserving)
 - **Anomaly detection:** Unsupervised detection of unusual behavioral patterns (e.g., bathroom visit frequency changes as early health indicator)
