@@ -261,3 +261,7 @@ v2/crates/rvcsi-node/*.node
 v2/crates/rvcsi-node/binding.js
 v2/crates/rvcsi-node/binding.d.ts
 v2/crates/rvcsi-node/npm/
+  
+# CSI recordings (large binary files)  
+data/recordings/  
+data/clone-data.rvf 
