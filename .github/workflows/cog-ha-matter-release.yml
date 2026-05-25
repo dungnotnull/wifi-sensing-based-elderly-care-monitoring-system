@@ -64,7 +64,7 @@ jobs:
           echo "Signed cog-ha-matter-x86_64 ($(wc -c < dist/cog-ha-matter-x86_64.sig) bytes)"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cog-ha-matter-x86_64
           path: |
@@ -126,7 +126,7 @@ jobs:
           echo "Signed cog-ha-matter-arm ($(wc -c < dist/cog-ha-matter-arm.sig) bytes)"
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: cog-ha-matter-arm
           path: |
