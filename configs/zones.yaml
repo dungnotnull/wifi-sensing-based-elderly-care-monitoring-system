@@ -1,0 +1,24 @@
+# ElderCare Zone Configuration
+#
+# Defines monitoring zones (rooms/areas) and assigned ESP32 nodes.
+# Each zone has a unique ID, name, and MAC address binding.
+# ESP32 nodes transmit CSI via MQTT under topic: eldercare/csi/{zone_id}
+
+zones:
+  - zone_id: "zone_bedroom"
+    name: "Phòng ngủ"
+    mac_address: "AA:BB:CC:DD:EE:01"
+    mqtt_topic: "eldercare/csi/zone_bedroom"
+    active: true
+
+  - zone_id: "zone_living"
+    name: "Phòng khách"
+    mac_address: "AA:BB:CC:DD:EE:02"
+    mqtt_topic: "eldercare/csi/zone_living"
+    active: true
+
+  - zone_id: "zone_hallway"
+    name: "Hành lang"
+    mac_address: "AA:BB:CC:DD:EE:03"
+    mqtt_topic: "eldercare/csi/zone_hallway"
+    active: true

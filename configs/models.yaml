@@ -1,0 +1,38 @@
+# ElderCare Model Configuration
+#
+# Checkpoint paths, device, and inference parameters for all models.
+
+device: "cpu"                              # "cpu" or "cuda" — RPi5 uses CPU
+
+fall_detection:
+  checkpoint: "models/fall_detection/checkpoints/csi_fallnet_best.pth"
+  input_shape: [100, 52]                   # T=100 time steps, C=52 subcarriers
+  inference_batch_size: 1
+  sliding_window_seconds: 2.0
+  window_stride_seconds: 0.5
+
+vital_signs:
+  respiration:
+    checkpoint: "models/vital_signs/checkpoints/respiration_denoiser.pth"
+    fft_window_seconds: 30.0
+    bandpass_low_hz: 0.1
+    bandpass_high_hz: 0.5
+    update_interval_seconds: 5.0
+  heart_rate:
+    checkpoint: "models/vital_signs/checkpoints/heart_rate_denoiser.pth"
+    bandpass_low_hz: 0.8
+    bandpass_high_hz: 2.0
+    experimental: true
+
+sleep:
+  checkpoint: "models/sleep/checkpoints/sleep_lstm_best.pth"
+  epoch_duration_minutes: 1                # 1-minute epochs
+  sequence_length: 480                     # 480 epochs = 8 hours
+
+activity:
+  checkpoint: "models/activity/checkpoints/activity_resnet.pth"
+  window_seconds: 30.0
+
+quantization:
+  enabled: true                            # INT8 quantization for RPi5 inference
+  backend: "fbgemm"                        # ARM CPU quantization backend
