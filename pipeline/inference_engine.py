@@ -79,10 +79,6 @@ class InferenceWorker(mp.Process):
         """Override in subclass to implement model-specific inference."""
         raise NotImplementedError
 
-    def process(self, packet: dict) -> Optional[InferenceResult]:
-        """Override in subclass to implement model-specific inference."""
-        raise NotImplementedError
-
 
 class FallDetectionWorker(InferenceWorker):
     """Fall detection inference worker with TwoStageConfirmer."""
