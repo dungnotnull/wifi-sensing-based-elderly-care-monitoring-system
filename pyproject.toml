@@ -161,7 +161,7 @@ monitoring = [
 ]
 
 deployment = [
-    "gunicorn>=21.2.0",
+    "gunicorn>=23.0.0",
     "docker>=6.1.0",
     "kubernetes>=28.1.0",
 ]
