@@ -503,9 +503,9 @@ Decoupled mapping functions for converting raw datasets into model-ready tensors
 
 ### Phase 5 — Documentation & Handoff (Week 8)
 
-- [ ] Write installation guide (deferred — needs hardware confirmation)
-- [ ] Write user guide for caregivers (deferred — post-EVAL)
-- [ ] Write system design document (deferred — post-EVAL)
+- [x] Write installation guide (`docs/installation.md`) — server setup, ESP32 flashing, Docker deployment, dataset setup, Telegram configuration, troubleshooting
+- [x] Write user guide for caregivers (`docs/user_guide.md`) — bilingual VI/EN, dashboard walkthrough, alert response guide, FAQ
+- [x] Write system design document (`docs/architecture.md`) — data flow diagrams, component design, design decisions, directory structure
 - [ ] Record short demo video (deferred — needs hardware)
 - [x] Evaluation module built (pipeline/evaluate.py). Mock evaluation report at data/evaluation/report.json
 - [x] **Dataset mappers built and tested (51 tests pass):** ElderAL-CSI CSV mapper (`training/dataset_mappers/__init__.py`) handles 2TXx3RX MIMO format with 512→52 subcarrier downsampling, sliding window extraction, and path-based label inference. CSI-Bench mapper (`training/dataset_mappers/csibench.py`) supports .npz and .mat formats with documented preprocessing pipeline. Both integrated into `train_fall_detection.py` via `--dataset-type` flag (elderal/csibench/mock/synthetic/auto).
