@@ -31,6 +31,14 @@ class InferenceResult:
     data: dict[str, Any]
 
 
+@dataclass
+class FallConfirmationEvent:
+    """Event posted when a fall is confirmed by TwoStageConfirmer."""
+    zone_id: str
+    timestamp: float
+    confidence: float
+
+
 class InferenceWorker(mp.Process):
     """Base class for model-specific inference workers."""
 

@@ -58,3 +58,16 @@ class TestTwoStageConfirmer:
         amp_low = torch.zeros(50, 52)  # variance = 0
         result = confirmer.check(amp_low, fall_confidence=0.50)
         assert result is True
+
+
+class TestFallConfirmationEvent:
+    def test_event_creation(self) -> None:
+        from pipeline.inference_engine import FallConfirmationEvent
+        event = FallConfirmationEvent(
+            zone_id="zone_bedroom",
+            timestamp=1000.0,
+            confidence=0.95,
+        )
+        assert event.zone_id == "zone_bedroom"
+        assert event.timestamp == 1000.0
+        assert event.confidence == 0.95
