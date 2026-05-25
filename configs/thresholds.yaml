@@ -38,3 +38,26 @@ activity:
   threshold_active: 0.5
   threshold_still: 0.15
   window_seconds: 30                   # sliding window for variance computation
+
+# Adaptive threshold configuration
+# When enabled, thresholds auto-tune based on observed data during deployment
+adaptive:
+  enabled: true
+  adaptation_period_hours: 48          # minimum observation period before adapting
+  min_active_threshold: 0.1
+  max_active_threshold: 2.0
+  fall_confidence_min: 0.7
+  fall_confidence_max: 0.95
+  target_fp_per_day: 2.0              # target false positive rate
+
+# Shadow mode for gradual rollout
+shadow_mode:
+  enabled: false                       # set true for first deployment
+  auto_enable_live_after_hours: 72     # auto-switch to live mode after 72h
+  event_log: "data/shadow_mode/events.jsonl"
+
+# Telemetry configuration
+telemetry:
+  enabled: true
+  storage_dir: "data/telemetry"
+  flush_interval_seconds: 300          # flush to disk every 5 minutes

@@ -74,7 +74,7 @@ Edit `configs/zones.yaml` to match your home layout. Each ESP32 needs a unique M
 ```yaml
 zones:
   - zone_id: "zone_bedroom"
-    name: "Phòng ngủ"
+    name: "Phong ngu"
     mac_address: "AA:BB:CC:DD:EE:01"
     mqtt_topic: "eldercare/csi/zone_bedroom"
     active: true
@@ -163,6 +163,20 @@ python -m training.train_sleep --epochs 10
 python -m pipeline.evaluate
 ```
 
+For recording and replaying real CSI data (after ESP32 nodes are active):
+
+```bash
+# Record real CSI data for offline analysis
+python -c "from pipeline.record_replay import CSIRecorder; \
+  recorder = CSIRecorder(output_dir='data/recorded/'); \
+  recorder.start(zone_id='zone_bedroom', duration_seconds=3600)"
+
+# Replay recorded data through pipeline
+python -c "from pipeline.record_replay import CSIReplayer; \
+  replayer = CSIReplayer(recording_dir='data/recorded/zone_bedroom/'); \
+  replayer.play(speed=1.0)"
+```
+
 ---
 
 ## 4. Docker Deployment
@@ -174,14 +188,14 @@ docker-compose -f docker/docker-compose.yml up --build
 ```
 
 This starts:
-- `mosquitto` — MQTT broker (port 1883)
-- `eldercare-server` — FastAPI dashboard + inference (port 8000)
+- `mosquitto` -- MQTT broker (port 1883)
+- `eldercare-server` -- FastAPI dashboard + inference (port 8000)
 
 ### 4.2 Verify
 
 ```bash
 curl http://localhost:8000/api/health
-# {"status": "healthy", "version": "0.1.0", ...}
+# {"status": "healthy", "version": "0.2.0", ...}
 ```
 
 ---
@@ -190,7 +204,7 @@ curl http://localhost:8000/api/health
 
 ### 5.1 CSI-Bench (public dataset)
 
-1. Download from [Kaggle — CSI-Bench](https://www.kaggle.com/datasets/guozhenjennzhu/csi-bench) (free account required)
+1. Download from [Kaggle -- CSI-Bench](https://www.kaggle.com/datasets/guozhenjennzhu/csi-bench) (free account required)
 2. Place preprocessed `.npz` files in `data/csibench/`
 3. Train:
 ```bash
@@ -284,3 +298,151 @@ curl http://localhost:8000/api/health
 - [ ] Telegram test alert received
 - [ ] `.env` configured with real tokens
 - [ ] Model checkpoints at expected paths
+- [ ] SQLite database created at `data/eldercare.db`
+- [ ] Shadow mode configured for first deployment (see Section 9.1)
+- [ ] Locale files present in `configs/locales/`
+- [ ] CSI quality monitoring active (check `/api/csi-quality/zone_bedroom`)
+
+---
+
+## 9. Advanced Configuration
+
+### 9.1 Shadow Mode
+
+Shadow Mode runs the full inference pipeline without sending real alerts. Use this during first deployment to verify everything works before going live.
+
+Edit `configs/thresholds.yaml`:
+
+```yaml
+shadow_mode:
+  enabled: true           # set to false when ready for production
+  log_detections: true    # write detections to log file
+  report_retention_days: 7
+```
+
+While shadow mode is active, all detections are logged but no Telegram messages are sent. Review what would have been alerted:
+
+```bash
+curl http://localhost:8000/api/shadow-mode/report
+```
+
+Once you are satisfied with the detection accuracy and false positive rate, set `shadow_mode.enabled: false` and restart the pipeline.
+
+### 9.2 Adaptive Thresholds
+
+The system can learn baseline activity and vitals patterns from the first 48 hours of deployment data, then auto-adjust alert thresholds accordingly.
+
+Edit `configs/thresholds.yaml`:
+
+```yaml
+adaptive:
+  enabled: true
+  learning_period_hours: 48
+  inactivity_multiplier: 1.5    # alert when 1.5x baseline inactivity
+  breathing_low_offset: -4      # alert when BPM drops 4 below baseline
+  breathing_high_offset: 4      # alert when BPM rises 4 above baseline
+  min_breathing_low: 8          # never alert below this BPM regardless
+  max_breathing_high: 25        # never alert above this BPM regardless
+```
+
+After the learning period, the system stores baseline values in `data/eldercare.db`. You can review or override learned values via the dashboard.
+
+### 9.3 InfluxDB Setup (Optional)
+
+For long-term historical data storage and trend analysis, you can configure InfluxDB alongside the default SQLite database.
+
+1. Install InfluxDB:
+```bash
+sudo apt install influxdb2
+sudo systemctl enable influxdb2
+sudo systemctl start influxdb2
+```
+
+2. Add to `.env`:
+```
+INFLUXDB_URL=http://localhost:8086
+INFLUXDB_TOKEN=your-influxdb-token
+INFLUXDB_ORG=eldercare
+INFLUXDB_BUCKET=vitals
+```
+
+3. The pipeline automatically writes time-series vitals data to InfluxDB when these variables are set. Historical charts on the dashboard will use InfluxDB when available, falling back to SQLite otherwise.
+
+### 9.4 Home Assistant Integration
+
+ElderCare publishes MQTT auto-discovery messages compatible with Home Assistant. Sensors and binary sensors for each zone appear automatically.
+
+Edit `configs/thresholds.yaml`:
+
+```yaml
+home_assistant:
+  enabled: true
+  discovery_prefix: "homeassistant"    # MQTT discovery topic prefix
+  update_interval_seconds: 30         # how often to publish state updates
+```
+
+Exposed entities per zone:
+- `sensor.eldercare_{zone}_respiration` -- breathing rate (BPM)
+- `sensor.eldercare_{zone}_sleep_score` -- nightly sleep score
+- `sensor.eldercare_{zone}_activity` -- activity state (active/still/inactive)
+- `binary_sensor.eldercare_{zone}_fall` -- fall detection alert
+- `sensor.eldercare_{zone}_heart_rate` -- heart rate (experimental)
+
+No additional configuration is needed in Home Assistant. Entities appear under Devices in the MQTT integration within a few minutes.
+
+### 9.5 Model Quantization
+
+For deployment on resource-constrained devices (Raspberry Pi 5), you can quantize models to INT8 to reduce inference time and memory usage.
+
+```bash
+python -c "from pipeline.quantization import quantize_from_checkpoint; quantize_from_checkpoint()"
+```
+
+This reads model checkpoints from `models/*/checkpoints/`, applies dynamic INT8 quantization, and saves quantized versions alongside the originals. The inference engine automatically loads quantized models when available.
+
+Quantization typically reduces model size by ~4x and improves inference speed by 2-3x on CPU, with minimal accuracy loss.
+
+### 9.6 Locale Configuration
+
+Alert messages and dashboard labels support multiple languages. The default is Vietnamese (`vi`).
+
+Edit `configs/alerts.yaml`:
+
+```yaml
+language: vi    # "vi" for Vietnamese, "en" for English
+
+templates:
+  vi:
+    emergency_title: "KHAN CAP"
+    warning_title: "CANH BAO"
+    info_title: "THONG TIN"
+  en:
+    emergency_title: "EMERGENCY"
+    warning_title: "WARNING"
+    info_title: "INFO"
+```
+
+Locale files for dashboard labels are stored in `configs/locales/`. Each locale is a YAML file (e.g., `vi.yaml`, `en.yaml`). To add a new language, create a new file in `configs/locales/` following the same structure.
+
+### 9.7 CSI Recording (for Debugging)
+
+You can record raw CSI data to disk for offline analysis, model debugging, or sharing with developers.
+
+```bash
+# Record CSI data from a specific zone
+python -c "from pipeline.record_replay import CSIRecorder; \
+  recorder = CSIRecorder(output_dir='data/recorded/'); \
+  recorder.start(zone_id='zone_bedroom', duration_seconds=3600)"
+
+# Replay recorded data through the pipeline
+python -c "from pipeline.record_replay import CSIReplayer; \
+  replayer = CSIReplayer(recording_dir='data/recorded/zone_bedroom/'); \
+  replayer.play(speed=1.0)"
+
+# List available recordings
+python -c "from pipeline.record_replay import CSIRecorder; \
+  recorder = CSIRecorder(output_dir='data/recorded/'); \
+  print(recorder.list_recordings())"
+```
+
+Recordings are stored as compressed numpy arrays in `data/recorded/{zone_id}/`. Each recording includes timestamps, raw CSI matrices, and metadata about the capture session.

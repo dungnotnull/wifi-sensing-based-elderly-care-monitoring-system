@@ -459,3 +459,81 @@ eldercare/
 ├── PROJECT-DETAIL.md            # Full project specification
 └── README.md                    # Project overview
 ```
+
+---
+
+## 10. v0.2 Upgrade — New Components
+
+### 10.1 Pipeline Extensions
+
+| Module | File | Purpose |
+|---|---|---|
+| **SQLitePersistence** | `pipeline/persistence.py` | Write-behind SQLite persistence for crash recovery. 4 tables: zone_status, vitals_history, alerts, sleep_records. WAL mode. 60s flush interval. |
+| **WorkerWatchdog** | `pipeline/watchdog.py` | Heartbeat monitoring for worker processes. Auto-restart crashed workers (max 3 per 10 min). System health: CPU, memory, disk via psutil. |
+| **CSIQualityChecker** | `pipeline/csi_quality.py` | Validates CSI input quality: SNR, packet loss rate, null subcarrier detection, RSSI. Rolling 100-packet averages per zone. |
+| **InfluxWriter** | `pipeline/influx_writer.py` | Batch writes to InfluxDB for time-series storage. Graceful degradation when unavailable. 100-point buffer, 10s flush. |
+| **ModelRegistry** | `pipeline/model_registry.py` | Config-driven worker creation from `configs/models.yaml`. Per-zone model selection, hot-swapping, dynamic class loading. |
+| **CorrelationTracker** | `pipeline/correlation.py` | End-to-end packet tracing with latency stats (p50/p95/p99). Per-stage breakdown. Module-level `tracker` singleton. |
+| **AdaptiveThreshold** | `pipeline/adaptive_thresholds.py` | Self-tuning thresholds from observed data. ActivityThresholdManager, FallConfidenceTuner. Learns baseline during first 48h. |
+| **CSIRecorder/Replayer** | `pipeline/record_replay.py` | Record CSI data to JSONL files. Replay at configurable speed. CSILabeler for annotating training data, export to .npz. |
+| **HomeAssistantDiscovery** | `pipeline/homeassistant.py` | MQTT auto-discovery for Home Assistant. 6 sensors per zone (fall, respiration, activity, sleep stage, sleep score, online). |
+| **ModelQuantizer** | `pipeline/quantization.py` | Post-training INT8 quantization for RPi5. Calibration, benchmarking, size reduction reporting. |
+| **ShadowMode** | `pipeline/shadow_mode.py` | Gradual rollout: suppress alerts, log events, label ground truth. Auto-expire after 72h. Precision report. |
+| **TelemetryCollector** | `pipeline/telemetry.py` | Local inference latency, system metrics, caregiver feedback. JSON file persistence every 5 min. |
+
+### 10.2 Model Improvements
+
+| Enhancement | File | Description |
+|---|---|---|
+| **Python Vitals Fallback** | `models/vital_signs/python_fallback.py` | Pure scipy FFT-based BreathingExtractor + HeartRateExtractor when wifi_densepose unavailable. |
+| **TemperatureScaling** | `models/calibration.py` | Post-training confidence calibration via LBFGS optimization. Computes ECE (Expected Calibration Error). |
+| **ConfidenceSmoother** | `models/calibration.py` | Rolling average over 3 consecutive windows to prevent single-frame false positives. |
+| **FocalLoss** | `models/sleep/model.py` | Replaces CrossEntropy for sleep model. Handles class imbalance with gamma=2.0 focusing parameter. |
+| **Sleep 5th feature** | `models/sleep/model.py` | Added movement_rate_of_change (epoch-to-epoch transition) to SleepFeatureExtractor. n_features now 5. |
+
+### 10.3 Infrastructure
+
+| Enhancement | File | Description |
+|---|---|---|
+| **i18n** | `alerts/i18n.py`, `configs/locales/` | YAML-based locale templates (Vietnamese + English). Dot-notation key lookup with format interpolation. |
+| **SSE Dashboard** | `dashboard/backend/main.py` | `GET /api/events` Server-Sent Events endpoint. Pushes zone status, alerts every 5 seconds. |
+| **Full React Dashboard** | `dashboard/frontend/src/App.js` | 552-line caregiver UI: zone cards, vitals graph (canvas), sleep chart (canvas), alert log, health panel, daily summary. |
+| **Vectorized Preprocessor** | `pipeline/preprocessor.py` | 130x speedup (687ms -> 5.3ms). Vectorized Hampel, Butterworth, phase sanitization using numpy matrix ops. |
+
+### 10.4 New Dashboard API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/events` | GET | SSE stream for real-time updates |
+| `/api/telemetry` | GET | Inference latency and system metrics |
+| `/api/correlation/traces` | GET | Recent packet traces with latency |
+| `/api/correlation/stats` | GET | Aggregate latency statistics |
+| `/api/shadow-mode/report` | GET | Shadow mode deployment report |
+| `/api/shadow-mode/go-live` | POST | Switch from shadow to live mode |
+| `/api/csi-quality/{zone_id}` | GET | Signal quality metrics per zone |
+| `/api/adaptive-thresholds` | GET | Current adaptive threshold values |
+
+### 10.5 Updated Data Flow
+
+```
+ESP32-S3 firmware
+  -> MQTT (eldercare/csi/{zone_id})
+  -> Ingestion Layer
+      -> CSI Quality Checker (SNR, packet loss, null subcarriers)
+  -> Correlation ID assignment
+  -> Signal Processing (vectorized: 130x faster)
+  -> Inference Engine (4 workers per zone)
+      -> FallDetector + TemperatureScaling + ConfidenceSmoother
+      -> VitalSignsEstimator (Rust or Python fallback)
+      -> SleepMonitor (5 features, FocalLoss)
+      -> ActivityTracker + AdaptiveThresholds
+  -> Result Orchestrator
+      -> SQLite Persistence (write-behind)
+      -> InfluxDB Writer (batch)
+      -> Shadow Mode Gate (suppress or dispatch alerts)
+      -> Alert Manager (i18n: Vietnamese/English)
+      -> Home Assistant MQTT Discovery
+      -> Telemetry Collector
+  -> Dashboard (SSE + REST API)
+      -> React Frontend (552 LOC)
+```

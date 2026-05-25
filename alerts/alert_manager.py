@@ -21,6 +21,8 @@ from typing import Any, Optional
 import yaml
 from dotenv import load_dotenv
 
+from alerts.i18n import locale
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -43,19 +45,21 @@ class AlertMessage:
     data: dict[str, Any] = field(default_factory=dict)
 
     def format_vn(self) -> str:
-        """Format alert message in Vietnamese."""
-        level_labels = {
-            AlertLevel.INFO: "ℹ️ THÔNG BÁO",
-            AlertLevel.WARNING: "⚠️ CẢNH BÁO",
-            AlertLevel.EMERGENCY: "🚨 KHẨN CẤP",
-        }
+        """Format alert message using the active locale."""
+        level_key = self.level.value.lower()  # info / warning / emergency
+        level_label = locale.t(f"alerts.level_{level_key}")
+        level_icon = locale.t(f"alerts.icon_{level_key}")
 
         dt = datetime.fromtimestamp(self.timestamp)
-        return (
-            f"{level_labels[self.level]}\n"
-            f"📍 Khu vực: {self.zone_name}\n"
-            f"⏰ Thời gian: {dt.strftime('%H:%M:%S %d/%m/%Y')}\n"
-            f"📋 Sự kiện: {self.description}"
+        timestamp_str = dt.strftime("%H:%M:%S %d/%m/%Y")
+
+        return locale.t(
+            "alerts.alert_format",
+            level_icon=level_icon,
+            level_label=level_label,
+            zone_name=self.zone_name,
+            timestamp=timestamp_str,
+            description=self.description,
         )
 
 
@@ -242,6 +246,6 @@ if __name__ == "__main__":
     mgr.send_info(
         zone_id="zone_test",
         zone_name="Phòng Test",
-        description="Hệ thống Alert Manager đã khởi động",
+        description=locale.t("alerts.system_started"),
     )
     print("Test alert dispatched. Check logs.")

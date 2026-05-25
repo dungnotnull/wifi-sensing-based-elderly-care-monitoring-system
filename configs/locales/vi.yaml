@@ -1,0 +1,108 @@
+# Vietnamese locale for ElderCare alert messages.
+# All templates use Python format strings with named placeholders.
+
+# --- Alert levels ---
+alerts:
+  level_info: "THÔNG BÁO"
+  level_warning: "CẢNH BÁO"
+  level_emergency: "KHẨN CẤP"
+
+  # --- Alert format ---
+  alert_format: "{level_icon} {level_label}\n📍 Khu vực: {zone_name}\n⏰ Thời gian: {timestamp}\n📋 Sự kiện: {description}"
+
+  # --- Level icons ---
+  icon_info: "ℹ️"
+  icon_warning: "⚠️"
+  icon_emergency: "🚨"
+
+  # --- Fall detection ---
+  fall_detected: "Phát hiện té ngã!"
+  fall_confidence: "Độ tin cậy: {confidence:.0%}"
+  fall_detected_format: "⚠️ PHÁT HIỆN TÉ NGÃ! (độ tin cậy: {confidence:.0%})"
+
+  # --- Inactivity ---
+  inactivity_detected: "Phát hiện không hoạt động kéo dài ({zone_id})"
+
+  # --- Post-fall emergency ---
+  post_fall_emergency: "KHẨN CẤP: Không cử động sau té ngã tại {zone_name}!"
+
+  # --- System ---
+  system_started: "Hệ thống Alert Manager đã khởi động"
+
+# --- Activity / zone state labels ---
+zone_states:
+  active: "hoạt động"
+  still: "nghỉ ngơi"
+  inactivity: "không hoạt động"
+  unknown: "không rõ"
+
+# --- Sleep stage labels ---
+sleep_stages:
+  awake: "thức"
+  light: "ngủ nông"
+  deep: "ngủ sâu"
+  unknown: "không rõ"
+
+# --- Sleep quality labels ---
+sleep_quality:
+  excellent: "rất tốt ✅"
+  good: "tốt ✅"
+  fair: "trung bình ⚠️"
+  poor: "kém ❌"
+
+# --- Daily summary ---
+daily_summary:
+  header: "📊 BÁO CÁO HÀNG NGÀY ELDERCARE"
+  dummy_notice: "⚠️ Dữ liệu mẫu — hệ thống chưa có dữ liệu thực tế"
+  separator: "────────────────────────────"
+
+  # Day names (Monday=0 .. Sunday=6)
+  days:
+    - "Thứ Hai"
+    - "Thứ Ba"
+    - "Thứ Tư"
+    - "Thứ Năm"
+    - "Thứ Sáu"
+    - "Thứ Bảy"
+    - "Chủ Nhật"
+
+  # Sections
+  section_night: "🌙 ĐÊM QUA"
+  section_current: "📋 TRẠNG THÁI HIỆN TẠI"
+  section_alerts: "🔔 CẢNH BÁO 24 GIỜ QUA"
+  section_advice: "💡 KHUYẾN NGHỊ"
+
+  # Night section
+  sleep_score_label: "Điểm giấc ngủ: {score}/100 — {quality}"
+  sleep_breakdown: "Ngủ sâu: {deep}% | Ngủ nông: {light}% | Thức: {awake}%"
+  no_sleep_data: "Chưa có dữ liệu giấc ngủ đêm qua."
+
+  # Current status section
+  respiration_label: "Hô hấp: {value} nhịp/phút"
+  heart_rate_label: "Nhịp tim: {value} BPM"
+  value_not_available: "chưa có"
+
+  # Alerts section
+  alert_counts: "🚨 Khẩn cấp: {emergency} | ⚠️ Cảnh báo: {warning} | ℹ️ Thông báo: {info}"
+  emergency_events: "❗ Các sự kiện khẩn cấp:"
+  no_alerts: "Không có cảnh báo nào trong 24 giờ qua. ✅"
+  dummy_alert_counts: "🚨 Khẩn cấp: 0 | ⚠️ Cảnh báo: 1 | ℹ️ Thông báo: 2"
+  dummy_warning_detail: "⚠️ Cảnh báo: Phát hiện không hoạt động kéo dài tại Phòng khách (21:15)"
+
+  # Advice
+  advice_sleep_schedule: "• Duy trì thời gian đi ngủ và thức dậy đều đặn để cải thiện chất lượng giấc ngủ."
+  advice_check_zone: "• Kiểm tra khu vực thường xuyên nếu có cảnh báo không hoạt động kéo dài."
+  advice_fall_doctor: "• Liên hệ ngay với bác sĩ nếu có sự kiện té ngã — dù không thấy chấn thương bên ngoài."
+  advice_all_normal: "• Mọi chỉ số trong giới hạn bình thường. Tiếp tục theo dõi."
+  advice_hydration: "• Đảm bảo uống đủ nước và vận động nhẹ nhàng trong ngày."
+
+  # Footer
+  footer_line: "ElderCare • Hệ thống giám sát người cao tuổi"
+  footer_timestamp: "Báo cáo tự động lúc {time}"
+
+  # Zone icons
+  zone_icons:
+    zone_bedroom: "🛏️"
+    zone_living: "🛋️"
+    zone_hallway: "🚪"
+    default: "📍"

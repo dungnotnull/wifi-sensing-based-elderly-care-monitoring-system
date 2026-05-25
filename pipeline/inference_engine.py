@@ -25,6 +25,9 @@ import torch
 import yaml
 
 from pipeline.data_store import store as data_store
+from pipeline.watchdog import WorkerWatchdog
+
+from alerts.i18n import locale
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,7 @@ class InferenceWorker(mp.Process):
         output_queue: mp.Queue,
         stop_event: mp.Event,
         config: dict,
+        heartbeat_dict: Optional[dict[str, float]] = None,
     ) -> None:
         super().__init__(name=name)
         self.model_name = name
@@ -61,12 +65,15 @@ class InferenceWorker(mp.Process):
         self.output_queue = output_queue
         self.stop_event = stop_event
         self.config = config
+        self._heartbeat_dict = heartbeat_dict
+        self._last_heartbeat: float = 0.0
 
     def run(self) -> None:
         logger.info(f"[{self.model_name}] Worker started for zone={self.zone_id}")
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         while not self.stop_event.is_set():
             try:
+                self._send_heartbeat()
                 packet = self.input_queue.get(timeout=0.5)
                 result = self.process(packet)
                 if result is not None:
@@ -76,6 +83,14 @@ class InferenceWorker(mp.Process):
             except Exception:
                 logger.exception(f"[{self.model_name}] Error in inference loop")
         logger.info(f"[{self.model_name}] Worker stopped")
+
+    def _send_heartbeat(self) -> None:
+        """Send heartbeat timestamp to shared dict every 5 seconds."""
+        now = time.time()
+        if now - self._last_heartbeat >= 5.0:
+            self._last_heartbeat = now
+            if self._heartbeat_dict is not None:
+                self._heartbeat_dict[self.model_name] = now
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
         raise NotImplementedError
@@ -186,7 +201,7 @@ class SleepWorker(InferenceWorker):
             return
         from models.sleep.model import SleepLSTM, SleepScorer, SleepFeatureExtractor
         self._feature_extractor = SleepFeatureExtractor(sample_rate=self._sample_rate)
-        self._model = SleepLSTM(n_features=4, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
+        self._model = SleepLSTM(n_features=5, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
         self._model.eval()
         try:
             ckpt = torch.load("models/sleep/checkpoints/sleep_lstm_best.pth", map_location="cpu")
@@ -344,8 +359,10 @@ class _ResultOrchestrator(threading.Thread):
             fd = r.data
             data_store.update_fall(zid, fd["fall_detected"], fd["fall_confidence"])
             if fd["fall_detected"]:
-                self._send_alert(zid, zone_name, "EMERGENCY", "Phát hiện té ngã!",
-                                 {"confidence": fd["fall_confidence"]})
+                self._send_alert(zid, zone_name, "EMERGENCY",
+                                 locale.t("alerts.fall_detected"),
+                                 {"confidence": fd["fall_confidence"]},
+                                 event_type="fall")
 
         elif r.model_name == "vital_signs":
             data_store.update_vitals(
@@ -360,10 +377,12 @@ class _ResultOrchestrator(threading.Thread):
             data_store.update_activity(zid, r.data["state"], r.data.get("alert"))
             if r.data.get("alert") == "WARNING":
                 self._send_alert(zid, zone_name, "WARNING",
-                                 f"Phát hiện không hoạt động kéo dài ({zid})")
+                                 locale.t("alerts.inactivity_detected", zone_id=zid),
+                                 event_type="inactivity")
             if r.data.get("post_fall_alert") == "EMERGENCY":
                 self._send_alert(zid, zone_name, "EMERGENCY",
-                                 f"KHẨN CẤP: Không cử động sau té ngã tại {zone_name}!")
+                                 locale.t("alerts.post_fall_emergency", zone_name=zone_name),
+                                 event_type="fall")
 
     def _check_daily_summary(self) -> None:
         from datetime import datetime
@@ -394,18 +413,19 @@ class _ResultOrchestrator(threading.Thread):
         except Exception:
             logger.exception("[Orchestrator] Failed to send daily summary")
 
-    def _send_alert(self, zone_id: str, zone_name: str, level: str, desc: str, data: dict = None) -> None:
+    def _send_alert(self, zone_id: str, zone_name: str, level: str, desc: str,
+                    data: dict = None, event_type: str = "alert") -> None:
         self._ensure_alert_mgr()
         lvl = getattr(self.AlertLevel, level, self.AlertLevel.INFO)
         msg = self.AlertMessage(
             zone_id=zone_id, zone_name=zone_name, level=lvl,
-            event_type=level.lower(), timestamp=time.time(),
+            event_type=event_type, timestamp=time.time(),
             description=desc, data=data or {},
         )
         dispatched = self._alert_mgr.send_alert(msg)
         data_store.add_alert({
             "zone_id": zone_id, "zone_name": zone_name, "level": level,
-            "event_type": "fall" if "té ngã" in desc else "inactivity" if "không hoạt động" in desc else "alert",
+            "event_type": event_type,
             "timestamp": time.time(), "description": desc, "dispatched": dispatched,
             "id": len(data_store._alerts),
         })
@@ -424,6 +444,10 @@ class InferenceEngine:
         self.workers: list[InferenceWorker] = []
         self._zone_queues: dict[str, list[mp.Queue]] = {}
         self._orchestrator: Optional[_ResultOrchestrator] = None
+        self._heartbeat_dict: dict[str, float] = mp.Manager().dict()
+        self._watchdog: Optional[WorkerWatchdog] = None
+        self._watchdog_stop: threading.Event = threading.Event()
+        self._start_time: float = 0.0
         self._create_workers()
 
         # Ensure data store has zones registered
@@ -462,22 +486,38 @@ class InferenceEngine:
                 kwargs: dict[str, Any] = {
                     "name": worker_name, "zone_id": zid, "input_queue": wq,
                     "output_queue": self.output_queue, "stop_event": self.stop_event, "config": wcfg,
+                    "heartbeat_dict": self._heartbeat_dict,
                 }
                 if wcls in (FallDetectionWorker, ActivityWorker):
                     kwargs["fall_event_queue"] = fall_event_queue
                 self.workers.append(wcls(**kwargs))
                 self._zone_queues.setdefault(zid, []).append(wq)
+                # Initialize heartbeat entry
+                self._heartbeat_dict[worker_name] = 0.0
 
     def start(self) -> None:
         logger.info(f"Starting inference engine: {len(self.workers)} workers, {len(self._zone_queues)} zones")
+        self._start_time = time.time()
         for w in self.workers:
             w.start()
         self._orchestrator = _ResultOrchestrator(self, self.output_queue, self.stop_event)
         self._orchestrator.start()
+        # Start watchdog
+        self._watchdog_stop.clear()
+        self._watchdog = WorkerWatchdog(
+            heartbeat_dict=self._heartbeat_dict,
+            stop_event=self._watchdog_stop,
+            engine=self,
+        )
+        self._watchdog.start()
 
     def stop(self) -> None:
         logger.info("Stopping inference engine...")
         self.stop_event.set()
+        # Stop watchdog first
+        if self._watchdog is not None:
+            self._watchdog.stop()
+            self._watchdog = None
         if self._orchestrator:
             self._orchestrator.join(timeout=3.0)
         for w in self.workers:
@@ -509,6 +549,58 @@ class InferenceEngine:
     @property
     def zone_configs(self) -> dict:
         return self._zone_configs
+
+    def restart_worker(self, worker_name: str) -> None:
+        """Terminate an unhealthy worker and start a replacement.
+
+        Finds the worker by name, terminates the process, then creates
+        and starts a new worker with the same configuration.
+        """
+        target: Optional[InferenceWorker] = None
+        for w in self.workers:
+            if w.model_name == worker_name:
+                target = w
+                break
+
+        if target is None:
+            logger.warning("Cannot restart unknown worker '%s'", worker_name)
+            return
+
+        logger.info("Restarting worker '%s' (pid=%d)", worker_name, target.pid or 0)
+        target.terminate()
+        target.join(timeout=5.0)
+
+        # Create replacement with same config
+        extra_kwargs: dict[str, Any] = {
+            "name": target.model_name,
+            "zone_id": target.zone_id,
+            "input_queue": target.input_queue,
+            "output_queue": target.output_queue,
+            "stop_event": target.stop_event,
+            "config": target.config,
+            "heartbeat_dict": self._heartbeat_dict,
+        }
+        if hasattr(target, "_fall_event_queue") and target._fall_event_queue is not None:
+            extra_kwargs["fall_event_queue"] = target._fall_event_queue
+        new_worker = type(target)(**extra_kwargs)
+
+        # Replace in workers list
+        idx = self.workers.index(target)
+        self.workers[idx] = new_worker
+        # Reset heartbeat for this worker
+        self._heartbeat_dict[worker_name] = 0.0
+        new_worker.start()
+        logger.info("Worker '%s' restarted as pid=%d", worker_name, new_worker.pid or 0)
+
+    def get_system_health(self, mqtt_connected: bool = False) -> dict:
+        """Return system health including resource metrics and worker status."""
+        from pipeline.watchdog import get_system_health as _get_system_health
+        worker_status = self._watchdog.get_all_worker_status() if self._watchdog else {}
+        return _get_system_health(
+            worker_status=worker_status,
+            mqtt_connected=mqtt_connected,
+            start_time=self._start_time,
+        )
 
 
 def main() -> None:

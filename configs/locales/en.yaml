@@ -1,0 +1,108 @@
+# English locale for ElderCare alert messages.
+# All templates use Python format strings with named placeholders.
+
+# --- Alert levels ---
+alerts:
+  level_info: "NOTICE"
+  level_warning: "WARNING"
+  level_emergency: "EMERGENCY"
+
+  # --- Alert format ---
+  alert_format: "{level_icon} {level_label}\n📍 Zone: {zone_name}\n⏰ Time: {timestamp}\n📋 Event: {description}"
+
+  # --- Level icons ---
+  icon_info: "ℹ️"
+  icon_warning: "⚠️"
+  icon_emergency: "🚨"
+
+  # --- Fall detection ---
+  fall_detected: "Fall detected!"
+  fall_confidence: "Confidence: {confidence:.0%}"
+  fall_detected_format: "⚠️ FALL DETECTED! (confidence: {confidence:.0%})"
+
+  # --- Inactivity ---
+  inactivity_detected: "Prolonged inactivity detected ({zone_id})"
+
+  # --- Post-fall emergency ---
+  post_fall_emergency: "EMERGENCY: No movement after fall in {zone_name}!"
+
+  # --- System ---
+  system_started: "Alert Manager system has started"
+
+# --- Activity / zone state labels ---
+zone_states:
+  active: "active"
+  still: "resting"
+  inactivity: "inactive"
+  unknown: "unknown"
+
+# --- Sleep stage labels ---
+sleep_stages:
+  awake: "awake"
+  light: "light sleep"
+  deep: "deep sleep"
+  unknown: "unknown"
+
+# --- Sleep quality labels ---
+sleep_quality:
+  excellent: "excellent ✅"
+  good: "good ✅"
+  fair: "fair ⚠️"
+  poor: "poor ❌"
+
+# --- Daily summary ---
+daily_summary:
+  header: "📊 ELDERCARE DAILY REPORT"
+  dummy_notice: "⚠️ Sample data — system has no real data yet"
+  separator: "────────────────────────────"
+
+  # Day names (Monday=0 .. Sunday=6)
+  days:
+    - "Monday"
+    - "Tuesday"
+    - "Wednesday"
+    - "Thursday"
+    - "Friday"
+    - "Saturday"
+    - "Sunday"
+
+  # Sections
+  section_night: "🌙 LAST NIGHT"
+  section_current: "📋 CURRENT STATUS"
+  section_alerts: "🔔 ALERTS — PAST 24 HOURS"
+  section_advice: "💡 RECOMMENDATIONS"
+
+  # Night section
+  sleep_score_label: "Sleep score: {score}/100 — {quality}"
+  sleep_breakdown: "Deep: {deep}% | Light: {light}% | Awake: {awake}%"
+  no_sleep_data: "No sleep data available for last night."
+
+  # Current status section
+  respiration_label: "Respiration: {value} breaths/min"
+  heart_rate_label: "Heart rate: {value} BPM"
+  value_not_available: "N/A"
+
+  # Alerts section
+  alert_counts: "🚨 Emergency: {emergency} | ⚠️ Warning: {warning} | ℹ️ Notice: {info}"
+  emergency_events: "❗ Emergency events:"
+  no_alerts: "No alerts in the past 24 hours. ✅"
+  dummy_alert_counts: "🚨 Emergency: 0 | ⚠️ Warning: 1 | ℹ️ Notice: 2"
+  dummy_warning_detail: "⚠️ Warning: Prolonged inactivity detected in Living Room (21:15)"
+
+  # Advice
+  advice_sleep_schedule: "• Maintain a consistent sleep and wake schedule to improve sleep quality."
+  advice_check_zone: "• Check the area regularly if there are prolonged inactivity alerts."
+  advice_fall_doctor: "• Contact a doctor immediately if a fall occurs — even without visible injuries."
+  advice_all_normal: "• All vitals are within normal range. Continue monitoring."
+  advice_hydration: "• Ensure adequate hydration and light exercise throughout the day."
+
+  # Footer
+  footer_line: "ElderCare • Elderly Care Monitoring System"
+  footer_timestamp: "Auto-generated report at {time}"
+
+  # Zone icons
+  zone_icons:
+    zone_bedroom: "🛏️"
+    zone_living: "🛋️"
+    zone_hallway: "🚪"
+    default: "📍"

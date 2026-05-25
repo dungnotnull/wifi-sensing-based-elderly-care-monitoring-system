@@ -2,7 +2,7 @@
 SleepLSTM training script.
 
 Trains the SleepLSTM model on mock sleep epoch data for verification.
-Full training on real sleep data will be done later when available.
+Uses FocalLoss + oversampling to handle class imbalance (especially the awake class).
 
 Usage:
     python training/train_sleep.py --mock --epochs 10
@@ -20,7 +20,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.sleep.model import SleepLSTM
+from models.sleep.model import FocalLoss, SleepLSTM
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class SleepDataset(torch.utils.data.Dataset):
     """Dataset for sleep stage classification.
 
     Each sample is one night of epoch features.
-    Returns (features, labels) of shape (N_epochs, 4) and (N_epochs,).
+    Returns (features, labels) of shape (N_epochs, 5) and (N_epochs,).
     """
 
     def __init__(self, data_path: Path) -> None:
@@ -77,6 +77,7 @@ def train_epoch(
     loader: torch.utils.data.DataLoader,
     optimizer: torch.optim.Optimizer,
     device: torch.device,
+    loss_fn: nn.Module,
 ) -> dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -90,7 +91,7 @@ def train_epoch(
         probs = model(features)  # (batch, N_epochs, 3)
         probs_flat = probs.reshape(-1, 3)
         labels_flat = labels.reshape(-1)
-        loss = F.cross_entropy(probs_flat, labels_flat)
+        loss = loss_fn(probs_flat, labels_flat)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
@@ -110,6 +111,7 @@ def evaluate(
     model: SleepLSTM,
     loader: torch.utils.data.DataLoader,
     device: torch.device,
+    loss_fn: nn.Module,
 ) -> dict[str, float]:
     model.eval()
     total_loss = 0.0
@@ -121,7 +123,7 @@ def evaluate(
         probs = model(features)
         probs_flat = probs.reshape(-1, 3)
         labels_flat = labels.reshape(-1)
-        loss = F.cross_entropy(probs_flat, labels_flat)
+        loss = loss_fn(probs_flat, labels_flat)
         total_loss += loss.item() * features.size(0)
         all_probs.append(probs.cpu())
         all_labels.append(labels.cpu())
@@ -139,9 +141,12 @@ def train_sleep(
     device: torch.device,
     epochs: int = 10,
     lr: float = 1e-3,
+    class_weights: Optional[torch.Tensor] = None,
 ) -> SleepLSTM:
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    loss_fn = FocalLoss(alpha=class_weights, gamma=2.0, reduction="mean")
 
     best_f1 = 0.0
     best_state = None
@@ -149,12 +154,13 @@ def train_sleep(
     logger.info(f"Training SleepLSTM on {device}")
     logger.info(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
     logger.info(f"  Epochs: {epochs}")
+    logger.info(f"  Loss: FocalLoss (gamma=2.0)")
 
     for epoch in range(epochs):
         start = time.time()
-        train_metrics = train_epoch(model, train_loader, optimizer, device)
+        train_metrics = train_epoch(model, train_loader, optimizer, device, loss_fn)
         scheduler.step()
-        val_metrics = evaluate(model, val_loader, device)
+        val_metrics = evaluate(model, val_loader, device, loss_fn)
         elapsed = time.time() - start
 
         logger.info(
@@ -210,15 +216,47 @@ def main() -> None:
     train_ds = SleepDataset(train_path)
     val_ds = SleepDataset(val_path)
 
-    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=args.batch_size, shuffle=True)
+    # Compute class frequencies for oversampling and focal loss alpha
+    flat_train_labels = train_ds.labels.flatten()
+    n_classes = 3
+    class_counts = torch.zeros(n_classes, dtype=torch.float32)
+    for cls in range(n_classes):
+        class_counts[cls] = (flat_train_labels == cls).sum().float()
+    logger.info(f"Per-class epoch counts (train): awake={int(class_counts[0])}, light={int(class_counts[1])}, deep={int(class_counts[2])}")
+
+    # Inverse frequency weights for oversampling
+    sample_weights = torch.zeros(len(flat_train_labels), dtype=torch.float32)
+    for cls in range(n_classes):
+        mask = flat_train_labels == cls
+        sample_weights[mask] = 1.0 / class_counts[cls]
+
+    # Per-night sample weights (average of per-epoch weights)
+    epochs_per_night = train_ds.features.shape[1]
+    night_weights = sample_weights.view(len(train_ds), -1).mean(dim=1)
+
+    sampler = torch.utils.data.WeightedRandomSampler(
+        weights=night_weights,
+        num_samples=len(train_ds),
+        replacement=True,
+    )
+
+    train_loader = torch.utils.data.DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler)
     val_loader = torch.utils.data.DataLoader(val_ds, batch_size=args.batch_size, shuffle=False)
 
-    model = SleepLSTM(n_features=4, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3).to(device)
+    # Alpha for FocalLoss: inverse frequency, normalized to sum to n_classes
+    alpha = n_classes * class_counts / class_counts.sum()
+    logger.info(f"FocalLoss alpha weights: awake={alpha[0]:.3f}, light={alpha[1]:.3f}, deep={alpha[2]:.3f}")
 
-    model = train_sleep(train_loader, val_loader, model, device, epochs=args.epochs, lr=args.lr)
+    model = SleepLSTM(n_features=5, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3).to(device)
+
+    model = train_sleep(
+        train_loader, val_loader, model, device,
+        epochs=args.epochs, lr=args.lr, class_weights=alpha,
+    )
 
     # Final evaluation
-    final = evaluate(model, val_loader, device)
+    loss_fn = FocalLoss(alpha=alpha, gamma=2.0, reduction="mean")
+    final = evaluate(model, val_loader, device, loss_fn)
     logger.info(
         f"Final val: loss={final['loss']:.4f}, "
         f"F1(awake)={final['f1_awake']:.3f}, "

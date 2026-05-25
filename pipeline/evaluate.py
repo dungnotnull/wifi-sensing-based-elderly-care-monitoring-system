@@ -105,7 +105,7 @@ def evaluate_sleep_model(
 
     logger.info("--- Sleep Model Evaluation ---")
 
-    model = SleepLSTM(n_features=4, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
+    model = SleepLSTM(n_features=5, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
     try:
         model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
         logger.info(f"Loaded checkpoint: {checkpoint_path}")
@@ -264,6 +264,86 @@ def run_all(output_path: Path = DEFAULT_OUTPUT) -> dict[str, Any]:
 
     logger.info(f"\nEvaluation report saved to {output_path}")
     return results
+
+
+def calibrate_fall_model(
+    checkpoint_path: str = "models/fall_detection/checkpoints/csi_fallnet_best.pth",
+) -> dict[str, Any]:
+    """Calibrate FallDetector confidence via temperature scaling.
+
+    Loads model, runs on validation data, prints pre/post calibration ECE.
+    """
+    from models.calibration import TemperatureScaling
+    from models.fall_detection.model import FallDetector
+
+    logger.info("--- Fall Model Calibration ---")
+
+    model = FallDetector(n_subcarriers=52, sequence_length=100)
+    try:
+        model.load_state_dict(torch.load(checkpoint_path, map_location="cpu"))
+        logger.info(f"Loaded checkpoint: {checkpoint_path}")
+    except FileNotFoundError:
+        logger.warning(f"No checkpoint at {checkpoint_path}, using untrained model")
+
+    model.eval()
+
+    val_path = Path("data/mock/fall/elderal_csi_val.npz")
+    if not val_path.exists():
+        logger.warning(f"Mock dataset not found at {val_path}. Running synthetic eval.")
+        from training.dataset import SyntheticCSIDataset
+        ds = SyntheticCSIDataset(n_samples=400, seed=9999)
+        data = torch.tensor(ds.data, dtype=torch.float32)
+        labels = torch.tensor(ds.labels, dtype=torch.long)
+    else:
+        loaded = np.load(val_path)
+        data = torch.tensor(loaded["data"], dtype=torch.float32)
+        labels = torch.tensor(loaded["labels"], dtype=torch.long)
+
+    # Collect raw logits (bypass temperature scaling for calibration)
+    all_logits = []
+    with torch.no_grad():
+        for i in range(len(data)):
+            csi = data[i].unsqueeze(0)
+            # Forward through conv + lstm + fc to get raw logits
+            x = csi.permute(0, 2, 1)
+            x = torch.nn.functional.relu(model.bn1(model.conv1(x)))
+            x = torch.nn.functional.relu(model.bn2(model.conv2(x)))
+            x = model.pool(x)
+            x = torch.nn.functional.relu(model.bn3(model.conv3(x)))
+            x = model.pool(x)
+            x = x.permute(0, 2, 1)
+            lstm_out, _ = model.lstm(x)
+            pooled = model.attention(lstm_out)
+            pooled = model.dropout(pooled)
+            pooled = torch.nn.functional.relu(model.fc1(pooled))
+            pooled = torch.nn.functional.relu(model.fc2(pooled))
+            logits = model.fc3(pooled)
+            all_logits.append(logits)
+
+    all_logits = torch.cat(all_logits, dim=0)
+
+    # Pre-calibration ECE
+    pre_calibrator = TemperatureScaling()  # T=1.0 (identity)
+    pre_ece = pre_calibrator.compute_ece(all_logits, labels)
+    logger.info(f"  Pre-calibration ECE:  {pre_ece:.4f}")
+
+    # Calibrate
+    nll = model.calibrate(all_logits, labels)
+
+    # Post-calibration ECE
+    post_ece = model.temperature_scaling.compute_ece(all_logits, labels)
+    logger.info(f"  Post-calibration ECE: {post_ece:.4f}")
+    logger.info(f"  Learned temperature:  {model.temperature_scaling.temperature.item():.4f}")
+    logger.info(f"  Final NLL:            {nll:.4f}")
+
+    result = {
+        "pre_calibration_ece": round(pre_ece, 4),
+        "post_calibration_ece": round(post_ece, 4),
+        "temperature": round(model.temperature_scaling.temperature.item(), 4),
+        "nll": round(nll, 4),
+        "checkpoint": checkpoint_path,
+    }
+    return result
 
 
 def main() -> None:

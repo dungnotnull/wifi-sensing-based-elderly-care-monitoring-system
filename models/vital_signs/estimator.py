@@ -1,10 +1,10 @@
 """Vital signs estimation using wifi_densepose Rust-native extractors.
 
-BreathingExtractor (0.1-0.5 Hz bandpass + zero-crossing) and
-HeartRateExtractor (0.8-2.0 Hz bandpass + autocorrelation) from
-the wifi_densepose package provide battle-tested RuView algorithms
-via PyO3 bindings. We keep the PhaseDenoiser as a supplementary
-enhancement for cleaner phase signals.
+Falls back to pure-Python scipy/numpy extractors when wifi_densepose is
+unavailable. BreathingExtractor (0.1-0.5 Hz bandpass + zero-crossing)
+and HeartRateExtractor (0.8-2.0 Hz bandpass + autocorrelation) from
+wifi_densepose provide battle-tested RuView algorithms via PyO3 bindings.
+The PhaseDenoiser is a supplementary enhancement for cleaner phase signals.
 """
 
 import logging
@@ -13,7 +13,16 @@ from typing import Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from wifi_densepose import BreathingExtractor, HeartRateExtractor
+
+_USE_RUST_BACKEND = True
+try:
+    from wifi_densepose import BreathingExtractor, HeartRateExtractor
+except ImportError:
+    from models.vital_signs.python_fallback import (
+        PythonBreathingExtractor as BreathingExtractor,
+        PythonHeartRateExtractor as HeartRateExtractor,
+    )
+    _USE_RUST_BACKEND = False
 
 logger = logging.getLogger(__name__)
 
@@ -46,11 +55,11 @@ class PhaseDenoiser(nn.Module):
 
 
 class VitalsAdapter:
-    """Stateful adapter wrapping wifi_densepose BreathingExtractor + HeartRateExtractor.
+    """Stateful adapter wrapping vital signs extractors.
 
+    Uses wifi_densepose Rust-native extractors when available.
+    Falls back to pure-Python scipy/numpy extractors otherwise.
     Feed one preprocessed amplitude frame at a time via feed_frame().
-    The Rust extractors maintain their own internal circular buffers
-    and return estimates when sufficient history is accumulated.
     """
 
     def __init__(
@@ -62,16 +71,34 @@ class VitalsAdapter:
     ) -> None:
         self.n_subcarriers = n_subcarriers
         self.sample_rate = sample_rate
-        self._br = BreathingExtractor(
-            n_subcarriers=n_subcarriers,
-            sample_rate=sample_rate,
-            window_secs=respiration_window_secs,
-        )
-        self._hr = HeartRateExtractor(
-            n_subcarriers=n_subcarriers,
-            sample_rate=sample_rate,
-            window_secs=heart_rate_window_secs,
-        )
+
+        if _USE_RUST_BACKEND:
+            logger.info("VitalsAdapter: using wifi_densepose Rust backend")
+            self._br = BreathingExtractor(
+                n_subcarriers=n_subcarriers,
+                sample_rate=sample_rate,
+                window_secs=respiration_window_secs,
+            )
+            self._hr = HeartRateExtractor(
+                n_subcarriers=n_subcarriers,
+                sample_rate=sample_rate,
+                window_secs=heart_rate_window_secs,
+            )
+        else:
+            logger.warning(
+                "VitalsAdapter: wifi_densepose unavailable, "
+                "falling back to pure-Python scipy extractors"
+            )
+            self._br = BreathingExtractor(
+                n_subcarriers=n_subcarriers,
+                sample_rate=sample_rate,
+                window_secs=respiration_window_secs,
+            )
+            self._hr = HeartRateExtractor(
+                n_subcarriers=n_subcarriers,
+                sample_rate=sample_rate,
+                window_secs=heart_rate_window_secs,
+            )
 
         self._last_br_est: Optional[float] = None
         self._last_br_conf: Optional[float] = None
@@ -94,7 +121,7 @@ class VitalsAdapter:
                 self._last_hr_est = hr_est.value_bpm
                 self._last_hr_conf = hr_est.confidence
         except Exception:
-            logger.exception("Error in wifi_densepose extractor")
+            logger.exception("Error in vitals extractor (backend=%s)", "rust" if _USE_RUST_BACKEND else "python")
 
     @property
     def respiration_bpm(self) -> Optional[float]:

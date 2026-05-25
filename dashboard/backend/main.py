@@ -11,13 +11,15 @@ shared InferenceDataStore (populated by the inference engine in real time).
 /api/health - service health
 """
 
+import asyncio
+import json
 import logging
 from datetime import datetime
 from typing import Optional
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from pipeline.data_store import store
@@ -92,19 +94,52 @@ async def root() -> str:
     <li><a href="/api/vitals">/api/vitals</a></li>
     <li><a href="/api/alerts">/api/alerts</a></li>
     <li><a href="/api/sleep">/api/sleep</a></li>
-    <li><a href="/api/health">/api/health</a></li></ul></body></html>"""
+    <li><a href="/api/health">/api/health</a></li>
+    <li><a href="/api/events">/api/events (SSE)</a></li>
+    <li><a href="/api/telemetry">/api/telemetry</a></li>
+    <li><a href="/api/shadow-mode/report">/api/shadow-mode/report</a></li></ul></body></html>"""
 
 
 @app.get("/api/health")
 async def health_check() -> dict:
+    import shutil
+    import psutil
+
     zone_statuses = store.get_all_zone_statuses()
-    return {
+    disk = shutil.disk_usage("/")
+    mem = psutil.virtual_memory()
+    cpu = psutil.cpu_percent(interval=0.1)
+
+    system_health: dict = {
         "status": "healthy",
         "version": "0.1.0",
         "timestamp": datetime.now().isoformat(),
         "zones_online": sum(1 for z in zone_statuses if z.online),
         "zones_total": len(zone_statuses),
+        "disk_usage_pct": round(disk.used / disk.total * 100, 1),
+        "memory_usage_pct": round(mem.percent, 1),
+        "cpu_usage_pct": round(cpu, 1),
+        "uptime_seconds": 0,
     }
+
+    alerts: list[str] = []
+    if system_health["disk_usage_pct"] > 90:
+        alerts.append("disk_usage_high")
+    if system_health["memory_usage_pct"] > 85:
+        alerts.append("memory_usage_high")
+    if alerts:
+        system_health["status"] = "degraded"
+        system_health["alerts"] = alerts
+
+    try:
+        from pipeline.watchdog import get_system_health
+        system_health.update(get_system_health(
+            worker_status=None, mqtt_connected=False, start_time=0.0,
+        ))
+    except ImportError:
+        pass
+
+    return system_health
 
 
 @app.get("/api/zones", response_model=list[ZoneStatusOut])
@@ -157,3 +192,95 @@ async def get_daily_summary(dummy: bool = Query(False)) -> dict:
     from alerts.daily_summary import generate_daily_summary
     text = generate_daily_summary(dummy=dummy)
     return {"summary": text, "dummy": dummy}
+
+
+@app.get("/api/telemetry")
+async def get_telemetry() -> dict:
+    from pipeline.telemetry import telemetry
+    return telemetry.get_dashboard_summary()
+
+
+@app.get("/api/correlation/traces")
+async def get_traces(limit: int = Query(100)) -> list[dict]:
+    from pipeline.correlation import tracker
+    return tracker.get_recent_traces(n=limit)
+
+
+@app.get("/api/correlation/stats")
+async def get_correlation_stats() -> dict:
+    from pipeline.correlation import tracker
+    return tracker.get_latency_stats()
+
+
+@app.get("/api/shadow-mode/report")
+async def get_shadow_report() -> dict:
+    from pipeline.shadow_mode import shadow_mode
+    return shadow_mode.generate_report()
+
+
+@app.post("/api/shadow-mode/go-live")
+async def shadow_go_live() -> dict:
+    from pipeline.shadow_mode import shadow_mode
+    shadow_mode.switch_to_live()
+    return {"status": "live", "message": "Alerts are now being sent."}
+
+
+@app.get("/api/csi-quality/{zone_id}")
+async def get_csi_quality(zone_id: str) -> dict:
+    quality = store.get_csi_quality(zone_id)
+    if quality is None:
+        return {"zone_id": zone_id, "status": "no_data"}
+    return quality
+
+
+@app.get("/api/adaptive-thresholds")
+async def get_adaptive_thresholds() -> dict:
+    return {
+        "message": "Thresholds are managed by AdaptiveThresholdManager in the inference engine.",
+        "config_path": "configs/thresholds.yaml",
+    }
+
+
+@app.get("/api/events")
+async def sse_events() -> StreamingResponse:
+    """Server-Sent Events endpoint for real-time dashboard updates.
+
+    Pushes zone status, fall alerts, vitals, and activity changes
+    as they occur. Falls back to 5-second polling of data store.
+    """
+    async def event_generator():
+        last_alert_count = 0
+        while True:
+            data: dict = {"zones": [], "alerts": []}
+
+            zone_statuses = store.get_all_zone_statuses()
+            for z in zone_statuses:
+                data["zones"].append({
+                    "zone_id": z.zone_id, "name": z.name,
+                    "activity_state": z.activity_state, "online": z.online,
+                    "respiration_bpm": z.respiration_bpm,
+                    "heart_rate_bpm": z.heart_rate_bpm,
+                    "fall_detected": z.fall_detected,
+                    "fall_confidence": z.fall_confidence,
+                    "sleep_stage": z.sleep_stage, "sleep_score": z.sleep_score,
+                    "last_seen": z.last_seen,
+                })
+
+            alerts = store.get_alerts(n=5)
+            if len(alerts) != last_alert_count:
+                data["new_alerts"] = alerts[-(len(alerts) - last_alert_count):]
+            last_alert_count = len(alerts)
+            data["alerts"] = alerts
+
+            yield f"data: {json.dumps(data, default=str)}\n\n"
+            await asyncio.sleep(5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

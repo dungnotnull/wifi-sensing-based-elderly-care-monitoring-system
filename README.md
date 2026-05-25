@@ -1,4 +1,4 @@
-# 🏥 ElderCare — WiFi-Based Elderly Monitoring System
+# ElderCare — WiFi-Based Elderly Monitoring System
 
 <p align="center">
   <em>Fall Detection · Vital Signs · Sleep Monitoring · Emergency Alerts</em><br>
@@ -27,22 +27,26 @@ WiFi signals already fill every home. Human bodies — even breathing — subtly
 | 🫁 **Respiration Monitoring** | FFT-based breathing rate (6–30 breaths/min), refreshed every 5 seconds |
 | 😴 **Sleep Quality** | LSTM sleep staging (awake/light/deep) + Sleep Score (0–100) |
 | ⚠️ **Alerting** | Three levels (INFO/WARNING/EMERGENCY) via Telegram, with cooldown |
-| 📊 **Dashboard** | Real-time web UI, mobile-responsive, 16px minimum font for older caregivers |
+| 📊 **Dashboard** | SSE-based real-time web UI, vitals graphs, sleep charts, alert log, health panel |
 | 🏠 **Multi-Zone** | Up to 3 zones (bedroom, living room, hallway) from 3 ESP32 nodes |
 | 🔒 **Privacy-First** | No cameras, no cloud, all inference runs locally |
+| 🔁 **Record/Replay** | Offline CSI data recording and replay for testing |
+| 📡 **Home Assistant** | MQTT auto-discovery integration for smart home setups |
+| 🧠 **Adaptive Thresholds** | Self-tuning from deployment data |
+| 🔬 **Shadow Mode** | Gradual model rollout with false-positive tracking |
 
 ### How ElderCare Differs
 
 | | ElderCare | Cameras | Wearables |
 |---|---|---|---|
-| Privacy preserving | ✅ | ❌ | ✅ |
-| No device on body | ✅ | ✅ | ❌ |
-| Works in darkness | ✅ | ❌ (needs IR) | ✅ |
-| Low cost (~$60) | ✅ | ❌ | ❌ |
-| 100% local (no cloud) | ✅ | Varies | Varies |
-| Fall detection | ✅ | ✅ | ✅ |
-| Vital signs | ✅ (breathing) | ❌ | ✅ |
-| Sleep monitoring | ✅ | ❌ | ✅ |
+| Privacy preserving | Yes | No | Yes |
+| No device on body | Yes | Yes | No |
+| Works in darkness | Yes | No (needs IR) | Yes |
+| Low cost (~$60) | Yes | No | No |
+| 100% local (no cloud) | Yes | Varies | Varies |
+| Fall detection | Yes | Yes | Yes |
+| Vital signs | Yes (breathing) | No | Yes |
+| Sleep monitoring | Yes | No | Yes |
 
 ---
 
@@ -52,23 +56,29 @@ WiFi signals already fill every home. Human bodies — even breathing — subtly
 ESP32-S3 (CSI capture @ 50Hz)
     │  MQTT (eldercare/csi/{zone_id})
     ▼
-ElderCare Ingestion Layer (MQTT receiver + ring buffers)
+ElderCare Ingestion Layer (MQTT receiver + ring buffers + CSI Quality Checker)
     │
     ▼
 ElderCare Signal Processing (Hampel → Bandpass → Phase sanitization → Z-score)
-    │
+    │  [Correlation ID tracking starts here]
     ▼
-ElderCare Inference Engine
+ElderCare Inference Engine (WorkerWatchdog health monitoring + auto-restart)
     ├── FallDetector (two-stage: CNN+BiLSTM + confirmation)
-    ├── VitalSignsEstimator (wifi_densepose Rust extractors)
+    ├── VitalSignsEstimator (wifi_densepose Rust / Python scipy fallback)
     ├── SleepMonitor (ElderCare SleepLSTM → Sleep Score)
-    └── ActivityTracker (rule-based + day/night context)
+    ├── ActivityTracker (rule-based + day/night context)
+    ├── Adaptive Thresholds (self-tuning from deployment data)
+    └── Shadow Mode (gradual rollout with FP tracking)
+    │
+    ├──► SQLite Persistence (crash recovery)
+    ├──► InfluxDB Writer (time-series storage)
+    ├──► Local Telemetry (inference latency, system metrics)
     │
     ▼
-ElderCare Alert Manager ──► Telegram / Log / InfluxDB
+ElderCare Alert Manager ──► Telegram / Log / InfluxDB (i18n: Vietnamese + English)
     │
     ▼
-ElderCare Dashboard (FastAPI + React) ──► Browser UI
+ElderCare Dashboard (FastAPI + SSE + React) ──► Browser UI
 ```
 
 ### RuView Components We Use
@@ -89,7 +99,24 @@ ElderCare Dashboard (FastAPI + React) ──► Browser UI
 | **Two-Stage Confirmer** | 0.85 confidence + 3-second inactivity window |
 | **SleepLSTM + Sleep Scorer** | Sleep staging + quality score (0–100) |
 | **Alert Manager** | Vietnamese Telegram alerts, 3-level cooldown system |
-| **Caregiver Dashboard** | Simplified UI, 16px font, Vietnamese labels |
+| **Caregiver Dashboard** | Full React UI with vitals graphs, sleep charts, alert log, health panel |
+| **Python Vitals Fallback** | Pure scipy vital signs when wifi_densepose unavailable |
+| **SQLite Persistence** | Crash recovery — events survive process restarts |
+| **InfluxDB Writer** | Time-series storage for vitals and system metrics |
+| **Worker Watchdog** | Auto-restart failed inference workers |
+| **CSI Quality Checker** | SNR, packet loss, and null subcarrier detection |
+| **Model Registry** | Config-driven worker creation for all model types |
+| **Correlation Tracker** | End-to-end latency tracing through the pipeline |
+| **Adaptive Thresholds** | Self-tuning from deployment data |
+| **Record/Replay** | Offline CSI data recording and replay for testing |
+| **Home Assistant Integration** | MQTT auto-discovery for smart home setups |
+| **Model Quantization** | INT8 quantization for Raspberry Pi 5 deployment |
+| **Shadow Mode** | Gradual model rollout with false-positive tracking |
+| **Local Telemetry** | Inference latency, system metrics collection |
+| **i18n** | Vietnamese + English locale support for alerts and UI |
+| **Focal Loss Sleep Training** | Balanced class detection for sleep staging |
+| **Confidence Calibration** | Temperature scaling + temporal smoothing |
+| **SSE Real-time Dashboard** | Server-Sent Events replacing HTTP polling |
 
 ---
 
@@ -126,7 +153,19 @@ docker-compose -f docker/docker-compose.yml up --build
 python -m pipeline.inference_engine --config configs/zones.yaml
 
 # Dashboard
-uvicorn dashboard.backend.main:app --host 0.0.0.0 --port 8000
+uvicorn dashboard.backend.main:app --host 0.0.0.0.0 --port 8000
+
+# Record CSI data for offline replay
+python -c "from pipeline.record_replay import CSIRecorder; \
+  recorder = CSIRecorder(output_dir='data/raw/session'); \
+  recorder.start()"
+
+# Quantize model for RPi5
+python -c "from pipeline.quantization import quantize_from_checkpoint; \
+  quantize_from_checkpoint('models/fall_detection/checkpoints/best.pt', output_path='models/fall_detection/quantized/')"
+
+# Evaluate with calibration
+python -m pipeline.evaluate
 ```
 
 ---
@@ -139,17 +178,40 @@ eldercare/
 ├── ingestion/             # MQTT ingestion wrapper (RuView-powered)
 ├── models/
 │   ├── fall_detection/    # ElderCare CSI-FallNet + TwoStageConfirmer
-│   ├── vital_signs/       # RuView FFT vital signs adapter
+│   ├── vital_signs/       # RuView FFT vital signs adapter + Python scipy fallback
+│   │   └── python_fallback.py  # Pure scipy vitals when wifi_densepose unavailable
 │   ├── sleep/             # ElderCare SleepLSTM + Sleep Scorer
-│   └── activity/          # ElderCare day/night-aware inactivity detection
-├── pipeline/              # Preprocessing (RuView) + ElderCare inference engine
-├── alerts/                # ElderCare alert manager (Telegram, VN)
+│   ├── activity/          # ElderCare day/night-aware inactivity detection
+│   └── calibration.py     # Confidence calibration (temperature scaling + smoothing)
+├── pipeline/
+│   ├── preprocessor.py    # Signal processing (RuView chain reimplementation)
+│   ├── inference_engine.py  # Multiprocessing inference engine
+│   ├── persistence.py     # SQLite persistence for crash recovery
+│   ├── watchdog.py        # WorkerWatchdog health monitoring + auto-restart
+│   ├── csi_quality.py     # CSI Quality Checker (SNR, packet loss, null subcarriers)
+│   ├── influx_writer.py   # InfluxDB time-series writer
+│   ├── model_registry.py  # Config-driven model worker creation
+│   ├── correlation.py     # Correlation ID tracking (end-to-end latency)
+│   ├── adaptive_thresholds.py  # Self-tuning thresholds from deployment data
+│   ├── record_replay.py   # CSI data recording and replay
+│   ├── homeassistant.py   # Home Assistant MQTT auto-discovery
+│   ├── quantization.py    # INT8 model quantization for RPi5
+│   ├── shadow_mode.py     # Shadow mode gradual rollout
+│   └── telemetry.py       # Local telemetry (inference latency, system metrics)
+├── alerts/
+│   ├── alert_manager.py   # Alert routing (Telegram, log, InfluxDB)
+│   └── i18n.py            # Vietnamese + English locale support
 ├── dashboard/
-│   ├── backend/           # FastAPI REST API
-│   └── frontend/          # Caregiver React UI
-├── configs/               # ElderCare YAML configs
+│   ├── backend/           # FastAPI REST API + SSE
+│   └── frontend/          # Caregiver React UI (vitals, sleep, alerts, health)
+├── configs/
+│   ├── zones.yaml         # Zone definitions, ESP32 MAC assignments
+│   ├── thresholds.yaml    # Model and alert thresholds
+│   ├── alerts.yaml        # Telegram bot config, cooldowns
+│   ├── models.yaml        # Model checkpoints, batch size, device
+│   └── locales/           # i18n locale files (vi.json, en.json)
 ├── training/              # Fine-tuning scripts
-├── tests/                 # Test suite
+├── tests/                 # Test suite (51 tests)
 ├── docker/                # Docker Compose deployment
 └── data/                  # CSI datasets + annotations (gitignored)
 ```
@@ -170,19 +232,23 @@ All datasets are free and publicly available:
 
 | Phase | Deliverable | Status |
 |---|---|---|
-| **Phase 0** | Fork RuView, establish project baseline, audit reusable components | ✅ Complete |
-| **Phase 1** | Preprocessing integration (RuView signal chain), baseline model training on CSI-Bench | 🔜 Next |
-| **Phase 2** | Fine-tune CSI-FallNet on ElderAL-CSI, multi-zone ingest, two-stage fall confirmation | ⏳ Planned |
-| **Phase 3** | Alert Manager (Telegram integration), Dashboard backend + frontend | ⏳ Planned |
-| **Phase 4** | Sleep monitoring (SleepLSTM training), system hardening, 24h stress test | ⏳ Planned |
-| **Phase 5** | Documentation, accuracy evaluation, handoff | ⏳ Planned |
+| **Phase 0** | Fork RuView, establish project baseline, audit reusable components | Complete |
+| **Phase 1** | Preprocessing integration (RuView signal chain), baseline model training on CSI-Bench | Complete |
+| **Phase 2** | Fine-tune CSI-FallNet on ElderAL-CSI, multi-zone ingest, two-stage fall confirmation | Complete |
+| **Phase 3** | Alert Manager (Telegram integration), Dashboard backend + frontend | Complete |
+| **Phase 4** | Sleep monitoring (SleepLSTM training), system hardening, 24h stress test | Complete |
+| **Phase 5** | Documentation, accuracy evaluation, handoff | Complete |
+| **Phase 6** | System Upgrade: persistence, watchdog, SSE dashboard, shadow mode, adaptive thresholds, quantization, i18n, calibration, record/replay, Home Assistant, telemetry, correlation tracking | Complete |
 
 ---
 
 ## Running Tests
 
 ```bash
+# Run all 51 tests
 pytest tests/ -v
+
+# Run with coverage (target: 70% for pipeline/ and models/)
 pytest tests/ --cov=pipeline --cov=models --cov-report=html
 ```
 
@@ -196,4 +262,4 @@ Forked from [RuView](https://github.com/ruvnet/RuView) (MIT License).
 
 ---
 
-**ElderCare** — Privacy-preserving, low-cost elderly monitoring for Vietnamese households.
+**ElderCare v0.2.0** — Privacy-preserving, low-cost elderly monitoring for Vietnamese households.

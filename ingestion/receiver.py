@@ -3,6 +3,7 @@ CSI Data Ingestion Layer
 
 Subscribes to MQTT topics for each configured zone, validates incoming
 CSI packets, and maintains per-zone ring buffers for downstream processing.
+Runs CSI quality checks on each packet and attaches quality metrics.
 """
 
 import json
@@ -13,6 +14,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 import paho.mqtt.client as mqtt
+
+from pipeline.csi_quality import CSIQualityChecker
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +69,7 @@ class CSIIngestion:
         self.buffers: dict[str, CSIRingBuffer] = {z.zone_id: CSIRingBuffer(zone_id=z.zone_id) for z in zones}
         self.stats: dict[str, IngestionStats] = {z.zone_id: IngestionStats() for z in zones}
         self._callbacks: list[callable] = []
+        self._quality_checker = CSIQualityChecker()
 
         self._client = mqtt.Client(client_id="eldercare-ingestion")
         self._client.on_connect = self._on_connect
@@ -122,6 +126,22 @@ class CSIIngestion:
                 return
 
             stats.last_packet_time = csipkt["timestamp"]
+
+            # Run CSI quality check
+            quality_report = self._quality_checker.check(csipkt)
+            csipkt["quality"] = {
+                "snr_db": quality_report.snr_db,
+                "packet_loss_rate": quality_report.packet_loss_rate,
+                "null_subcarriers": quality_report.null_subcarriers,
+                "rssi_dbm": quality_report.rssi_dbm,
+                "quality_score": quality_report.quality_score,
+            }
+            if not quality_report.is_acceptable():
+                logger.warning(
+                    "Poor CSI quality for zone=%s: snr=%.1fdB loss=%.2f score=%.2f nulls=%d",
+                    zone.zone_id, quality_report.snr_db, quality_report.packet_loss_rate,
+                    quality_report.quality_score, len(quality_report.null_subcarriers),
+                )
 
             self.buffers[zone.zone_id].push(csipkt)
 

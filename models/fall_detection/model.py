@@ -1,9 +1,9 @@
 """
 CSI-FallNet: Fall Detection Model
 
-Architecture: 1D-CNN → BiLSTM → Attention Pooling → FC Classifier
+Architecture: 1D-CNN -> BiLSTM -> Attention Pooling -> FC Classifier
 
-Input:  CSI amplitude matrix, shape (T=100, C=52) — 2-second sliding window at 50 Hz
+Input:  CSI amplitude matrix, shape (T=100, C=52) -- 2-second sliding window at 50 Hz
 Output: Binary {fall, non-fall} with confidence score
 """
 
@@ -13,6 +13,8 @@ from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from models.calibration import ConfidenceSmoother, TemperatureScaling
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class FallDetector(nn.Module):
 
         self.n_subcarriers = n_subcarriers
         self.sequence_length = sequence_length
+        self.temperature_scaling: Optional[TemperatureScaling] = None
 
         # CNN feature extractor
         self.conv1 = nn.Conv1d(n_subcarriers, conv_channels[0], kernel_size=5, padding="same")
@@ -120,9 +123,35 @@ class FallDetector(nn.Module):
         x = F.relu(self.fc2(x))
         logits = self.fc3(x)
 
+        # Apply temperature scaling if calibrated
+        if self.temperature_scaling is not None:
+            logits = self.temperature_scaling(logits)
+
         confidence = F.softmax(logits, dim=1)
 
         return logits, confidence
+
+    def calibrate(
+        self,
+        logits: torch.Tensor,
+        labels: torch.Tensor,
+        lr: float = 0.01,
+        max_iter: int = 50,
+    ) -> float:
+        """Learn temperature scaling on validation logits.
+
+        Args:
+            logits: raw model outputs, shape (N, 2)
+            labels: ground-truth labels, shape (N,)
+            lr: learning rate for LBFGS
+            max_iter: maximum LBFGS iterations
+
+        Returns:
+            Final NLL after calibration.
+        """
+        self.temperature_scaling = TemperatureScaling()
+        nll = self.temperature_scaling.calibrate(logits, labels, lr=lr, max_iter=max_iter)
+        return nll
 
     def predict(self, csi_window: torch.Tensor) -> Tuple[int, float]:
         """Run inference on a single window and return (class, confidence)."""
@@ -141,8 +170,11 @@ class FallDetector(nn.Module):
 
 class TwoStageConfirmer:
     """Implements two-stage fall confirmation:
-    Stage 1: model confidence > threshold
+    Stage 1: smoothed model confidence > threshold
     Stage 2: CSI variance drops below inactivity_threshold for 3 seconds
+
+    Uses ConfidenceSmoother to avoid single-frame confidence spikes
+    triggering premature confirmation.
     """
 
     def __init__(
@@ -151,11 +183,13 @@ class TwoStageConfirmer:
         confirmation_window_seconds: float = 3.0,
         inactivity_threshold: float = 0.15,
         sample_rate: float = 50.0,
+        smoother_window: int = 3,
     ) -> None:
         self.confidence_threshold = confidence_threshold
         self.confirmation_windows = int(confirmation_window_seconds * sample_rate)
         self.inactivity_threshold = inactivity_threshold
         self._pending_confirmation: Optional[float] = None  # timestamp of initial trigger
+        self._smoother = ConfidenceSmoother(window_size=smoother_window)
 
     def check(
         self, csi_amplitude: torch.Tensor, fall_confidence: float
@@ -165,16 +199,20 @@ class TwoStageConfirmer:
         Returns:
             True if confirmed fall, False if dismissed, None if still pending.
         """
+        # Smooth confidence to avoid single-frame spikes
+        smoothed = self._smoother.update(fall_confidence)
+
         if self._pending_confirmation is not None:
             # Stage 2: check variance over recent frames
             variance = torch.var(csi_amplitude).item()
             if variance < self.inactivity_threshold:
                 self._pending_confirmation = None
+                self._smoother.reset()
                 return True
             return None  # still checking
 
-        # Stage 1: initial trigger
-        if fall_confidence >= self.confidence_threshold:
+        # Stage 1: initial trigger (using smoothed confidence)
+        if smoothed >= self.confidence_threshold:
             self._pending_confirmation = 0.0
             return None  # pending confirmation
 
@@ -182,3 +220,4 @@ class TwoStageConfirmer:
 
     def reset(self) -> None:
         self._pending_confirmation = None
+        self._smoother.reset()

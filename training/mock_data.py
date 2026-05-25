@@ -79,7 +79,7 @@ def generate_fall_dataset(
 def generate_sleep_dataset(
     n_nights: int = 100,
     epochs_per_night: int = 480,  # 480 epochs = 8 hours
-    n_features: int = 4,
+    n_features: int = 5,
     seed: int = 99,
     output_dir: Optional[Path] = None,
 ) -> tuple[Path, Path]:
@@ -175,27 +175,32 @@ def _make_walking_window(rng: np.random.Generator, T: int, C: int) -> np.ndarray
 def _make_sleep_night(
     rng: np.random.Generator, n_epochs: int, n_features: int
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Generate one night of sleep data with realistic stage transitions.
+    """Generate one night of sleep data with balanced stage distribution.
 
-    Sleep architecture: awake(10%) -> light(50%) -> deep(40) → light → awake
+    Sleep architecture includes deliberate awake periods throughout the night
+    to ensure the awake class is well-represented (not just ~5% at boundaries).
+    Target distribution: awake ~25%, light ~40%, deep ~35%.
     """
     features = np.zeros((n_epochs, n_features), dtype=np.float32)
     labels = np.zeros(n_epochs, dtype=np.int64)
 
-    # Generate realistic sleep architecture using a state machine
-    state = 0  # start awake
-    stage_counts = {0: 0, 1: 0, 2: 0}
+    # Build stage sequence with awake segments interspersed for balance
     state_chains = [
-        [0] * int(rng.integers(5, 20)),      # initial awake
-        [1] * int(rng.integers(20, 80)),       # transition to light
-        [2] * int(rng.integers(60, 200)),      # deep sleep cycles
-        [1] * int(rng.integers(30, 100)),      # back to light
-        [2] * int(rng.integers(40, 150)),      # more deep
-        [1] * int(rng.integers(20, 80)),       # light
-        [2] * int(rng.integers(20, 100)),      # more deep
-        [1] * int(rng.integers(30, 80)),       # light
+        [0] * int(rng.integers(15, 30)),      # initial awake (bedtime)
+        [1] * int(rng.integers(20, 50)),       # light sleep onset
+        [2] * int(rng.integers(40, 80)),       # first deep cycle
+        [1] * int(rng.integers(15, 30)),       # light
+        [0] * int(rng.integers(8, 20)),        # brief awakening
+        [1] * int(rng.integers(20, 40)),       # back to light
+        [2] * int(rng.integers(30, 60)),       # second deep cycle
+        [1] * int(rng.integers(15, 30)),       # light
+        [0] * int(rng.integers(5, 15)),        # brief awakening
+        [1] * int(rng.integers(15, 25)),       # light
+        [2] * int(rng.integers(20, 40)),       # third deep cycle
+        [1] * int(rng.integers(20, 40)),       # light
+        [0] * int(rng.integers(10, 25)),       # morning awakening
     ]
-    all_stages = []
+    all_stages: list[int] = []
     for chain in state_chains:
         all_stages.extend(chain)
     if len(all_stages) > n_epochs:
@@ -204,15 +209,15 @@ def _make_sleep_night(
         all_stages.extend([rng.integers(0, 3) for _ in range(n_epochs - len(all_stages))])
     all_stages = all_stages[:n_epochs]
 
+    prev_movement = 0.0
     for t, stage in enumerate(all_stages):
         labels[t] = stage
-        stage_counts[stage] += 1
 
-        if stage == 0:  # awake
-            resp = rng.normal(18, 2)
-            resp_std = rng.uniform(1.0, 3.0)
-            movement = rng.uniform(0.08, 0.3)
-            bursts = int(rng.integers(2, 12))
+        if stage == 0:  # awake -- higher movement variance
+            resp = rng.normal(18, 2.5)
+            resp_std = rng.uniform(1.0, 3.5)
+            movement = rng.uniform(0.10, 0.40)
+            bursts = int(rng.integers(3, 15))
         elif stage == 1:  # light
             resp = rng.normal(15, 1.5)
             resp_std = rng.uniform(0.5, 1.5)
@@ -224,7 +229,11 @@ def _make_sleep_night(
             movement = rng.uniform(0.005, 0.04)
             bursts = int(rng.integers(0, 1))
 
-        features[t] = [resp, resp_std, movement, bursts]
+        # Transition feature: movement rate of change
+        movement_rate_of_change = movement - prev_movement
+        prev_movement = movement
+
+        features[t] = [resp, resp_std, movement, bursts, movement_rate_of_change]
 
     return features, labels
 

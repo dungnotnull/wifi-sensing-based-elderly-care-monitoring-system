@@ -1,11 +1,12 @@
 """
 SleepLSTM: Sleep Quality Monitoring Model
 
-Input:  4 features per 1-minute epoch:
+Input:  5 features per 1-minute epoch:
           1. Mean respiration rate
           2. Respiration rate variability (std)
           3. Movement index (mean CSI amplitude variance)
           4. Body movement burst count
+          5. Movement rate of change (transition feature)
 
 Output: 3-class {awake, light, deep} per epoch + Sleep Score (0–100)
 """
@@ -21,12 +22,50 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
+class FocalLoss(nn.Module):
+    """Focal loss for addressing class imbalance.
+
+    Down-weights easy examples so the model focuses on hard,
+    misclassified ones. Standard formula:
+        FL(p_t) = -alpha_t * (1 - p_t)^gamma * log(p_t)
+    """
+
+    def __init__(
+        self,
+        alpha: Optional[torch.Tensor] = None,
+        gamma: float = 2.0,
+        reduction: str = "mean",
+    ) -> None:
+        super().__init__()
+        self.alpha = alpha  # per-class weights, shape (n_classes,)
+        self.gamma = gamma
+        self.reduction = reduction
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # logits: (N, C), targets: (N,)
+        ce_loss = F.cross_entropy(logits, targets, reduction="none")
+        pt = torch.exp(-ce_loss)  # p_t for the correct class
+        focal_weight = (1.0 - pt) ** self.gamma
+
+        if self.alpha is not None:
+            alpha_t = self.alpha.to(logits.device)[targets]
+            focal_weight = focal_weight * alpha_t
+
+        loss = focal_weight * ce_loss
+
+        if self.reduction == "mean":
+            return loss.mean()
+        elif self.reduction == "sum":
+            return loss.sum()
+        return loss
+
+
 class SleepLSTM(nn.Module):
     """LSTM-based sleep stage classifier."""
 
     def __init__(
         self,
-        n_features: int = 4,
+        n_features: int = 5,
         hidden_dim: int = 64,
         n_layers: int = 2,
         n_classes: int = 3,
@@ -125,38 +164,50 @@ class SleepFeatureExtractor:
     def __init__(self, sample_rate: float = 50.0) -> None:
         self.sample_rate = sample_rate
         self.epoch_frames = int(60 * sample_rate)  # frames per 1-minute epoch
+        self._prev_movement_index: Optional[float] = None
 
     def extract(
         self, csi_amplitude: np.ndarray, respiration_rate: Optional[float] = None
     ) -> np.ndarray:
         """
         Args:
-            csi_amplitude: shape (N_time, n_subcarriers) — one epoch of data
+            csi_amplitude: shape (N_time, n_subcarriers) -- one epoch of data
             respiration_rate: optional external respiration BPM estimate
 
         Returns:
-            4-element feature vector:
-              [mean_respiration, respiration_std, movement_index, burst_count]
+            5-element feature vector:
+              [mean_respiration, respiration_std, movement_index,
+               burst_count, movement_rate_of_change]
         """
         n_time = csi_amplitude.shape[0]
 
         # Movement index: mean CSI amplitude variance
         per_frame_amplitude = np.mean(np.abs(csi_amplitude), axis=1)  # (N_time,)
-        movement_index = np.var(per_frame_amplitude)
+        movement_index = float(np.var(per_frame_amplitude))
 
         # Respiration-related features (simplified from amplitude variance pattern)
         if n_time > 2:
             frame_diffs = np.diff(per_frame_amplitude)
-            respiration_std = np.std(frame_diffs) if len(frame_diffs) > 0 else 0.0
+            respiration_std = float(np.std(frame_diffs)) if len(frame_diffs) > 0 else 0.0
         else:
             respiration_std = 0.0
 
         # Burst count: number of rapid movement bursts (threshold crossings)
         threshold = 0.3
         crossings = np.diff((np.abs(per_frame_amplitude) > threshold).astype(int))
-        burst_count = np.sum(crossings == 1)
+        burst_count = float(np.sum(crossings == 1))
 
-        # Mean respiration rate placeholder — real estimate comes from VitalSignsEstimator
+        # Mean respiration rate placeholder -- real estimate comes from VitalSignsEstimator
         mean_respiration = respiration_rate if respiration_rate is not None else 15.0
 
-        return np.array([mean_respiration, respiration_std, movement_index, burst_count], dtype=np.float32)
+        # Transition feature: movement rate of change from previous epoch
+        if self._prev_movement_index is not None:
+            movement_rate_of_change = movement_index - self._prev_movement_index
+        else:
+            movement_rate_of_change = 0.0
+        self._prev_movement_index = movement_index
+
+        return np.array(
+            [mean_respiration, respiration_std, movement_index, burst_count, movement_rate_of_change],
+            dtype=np.float32,
+        )

@@ -6,12 +6,26 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "recharts": "^2.10.0",
-    "axios": "^1.6.0"
+    "axios": "^1.6.0",
+    "ajv": "8.12.0",
+    "ajv-keywords": "5.1.0",
+    "schema-utils": "3.3.0"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build"
   },
-  "proxy": "http://localhost:8000"
+  "proxy": "http://localhost:8000",
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
 }
