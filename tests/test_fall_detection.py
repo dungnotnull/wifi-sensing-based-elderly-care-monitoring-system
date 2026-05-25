@@ -71,3 +71,38 @@ class TestFallConfirmationEvent:
         assert event.zone_id == "zone_bedroom"
         assert event.timestamp == 1000.0
         assert event.confidence == 0.95
+
+
+class TestFallDetectionWorkerIntegration:
+    def test_worker_uses_two_stage_confirmer(self) -> None:
+        import multiprocessing as mp
+        from pipeline.inference_engine import FallDetectionWorker, FallConfirmationEvent
+
+        input_q: mp.Queue = mp.Queue()
+        output_q: mp.Queue = mp.Queue()
+        fall_event_q: mp.Queue = mp.Queue()
+        stop = mp.Event()
+
+        config = {
+            "sample_rate": 50.0,
+            "window_size": 100,
+            "n_subcarriers": 52,
+            "confidence_threshold": 0.85,
+            "confirmation_window_seconds": 3.0,
+            "inactivity_threshold": 0.15,
+        }
+
+        worker = FallDetectionWorker(
+            name="FallDetection_zone_test",
+            zone_id="zone_test",
+            input_queue=input_q,
+            output_queue=output_q,
+            stop_event=stop,
+            config=config,
+            fall_event_queue=fall_event_q,
+        )
+
+        # Verify worker has a FallDetector instance
+        assert worker._detector is not None
+        assert worker._confirmer is not None
+        assert worker._fall_event_queue is fall_event_q

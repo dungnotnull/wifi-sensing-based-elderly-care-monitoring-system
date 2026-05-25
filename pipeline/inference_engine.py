@@ -82,12 +82,28 @@ class InferenceWorker(mp.Process):
 
 
 class FallDetectionWorker(InferenceWorker):
-    """Fall detection inference worker."""
+    """Fall detection inference worker with TwoStageConfirmer."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, fall_event_queue: Optional[mp.Queue] = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._window_size = self.config.get("window_size", 100)
         self._buffer: list[dict] = []
+
+        from models.fall_detection.model import FallDetector, TwoStageConfirmer
+
+        self._detector = FallDetector(
+            n_subcarriers=self.config.get("n_subcarriers", 52),
+            sequence_length=self._window_size,
+        )
+        self._detector.eval()
+
+        self._confirmer = TwoStageConfirmer(
+            confidence_threshold=self.config.get("confidence_threshold", 0.85),
+            confirmation_window_seconds=self.config.get("confirmation_window_seconds", 3.0),
+            inactivity_threshold=self.config.get("inactivity_threshold", 0.15),
+            sample_rate=self.config.get("sample_rate", 50.0),
+        )
+        self._fall_event_queue = fall_event_queue
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
         self._buffer.append(packet)
@@ -97,20 +113,34 @@ class FallDetectionWorker(InferenceWorker):
         if len(self._buffer) < self._window_size:
             return None
 
-        # Extract amplitude matrix
         amp = np.array([p["csi_amplitude"] for p in self._buffer])
 
-        # Placeholder: actual model inference goes here (Phase 1+)
-        # For Phase 0, return a stub result
-        fall_confidence = 0.01  # dummy value
+        import torch
+        csi_tensor = torch.tensor(amp, dtype=torch.float32)
+        pred_class, confidence = self._detector.predict(csi_tensor)
+
+        csi_for_confirmer = torch.tensor(amp, dtype=torch.float32)
+        confirmation = self._confirmer.check(csi_for_confirmer, float(confidence))
+
+        fall_detected = False
+        if confirmation is True:
+            fall_detected = True
+            if self._fall_event_queue is not None:
+                self._fall_event_queue.put(FallConfirmationEvent(
+                    zone_id=self.zone_id,
+                    timestamp=packet["timestamp"],
+                    confidence=float(confidence),
+                ))
+            self._confirmer.reset()
 
         return InferenceResult(
             zone_id=self.zone_id,
             model_name="fall_detection",
             timestamp=packet["timestamp"],
             data={
-                "fall_detected": False,
-                "fall_confidence": fall_confidence,
+                "fall_detected": fall_detected,
+                "fall_confidence": float(confidence),
+                "confirmation_pending": confirmation is None,
             },
         )
 
