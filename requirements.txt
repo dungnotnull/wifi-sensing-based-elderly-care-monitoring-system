@@ -1,38 +1,33 @@
-# Core dependencies
-numpy>=1.21.0
-scipy>=1.7.0
-torch>=1.12.0
-torchvision>=0.13.0
+# WiFi sensing core (RuView Rust bindings — BreathingExtractor, HeartRateExtractor)
+wifi-densepose>=2.0.0a1
 
-# API dependencies
-fastapi>=0.95.0
-uvicorn>=0.20.0
-websockets>=15.0.1
-pydantic>=1.10.0
-python-jose[cryptography]>=3.3.0
+# Deep learning + signal processing
+torch>=2.1.0
+numpy>=1.24.0
+scipy>=1.11.0
+scikit-learn>=1.3.0
+
+# API server
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
 python-multipart>=0.0.6
-passlib[bcrypt]>=1.7.4
-httpx>=0.24.0
-pydantic-settings>=2.0.0
 
-# Database dependencies
-sqlalchemy>=2.0.0
-asyncpg>=0.28.0
-aiosqlite>=0.22.1
-redis>=4.5.0
+# MQTT (Mosquitto broker — multi-zone topic routing)
+paho-mqtt>=1.6.0
 
-# CLI dependencies
-click>=8.0.0
-alembic>=1.10.0
+# Alerting
+python-telegram-bot>=20.0
 
-# Hardware interface dependencies
-asyncio-mqtt>=0.16.2
-aiohttp>=3.13.5
-paramiko>=3.0.0
+# Time-series database
+influxdb-client>=1.38.0
 
-# Data processing dependencies
-opencv-python>=4.7.0
-scikit-learn>=1.2.0
+# Configuration and utilities
+click>=8.1.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
 
-# Monitoring dependencies
-prometheus-client>=0.16.0
+# Logging and monitoring
+structlog>=23.2.0
+psutil>=5.9.0

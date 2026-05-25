@@ -209,9 +209,30 @@ class AlertManager:
             )
         )
 
-    def generate_daily_summary(self) -> str:
-        """Generate a daily summary report (placeholder — Phase 3+)."""
-        return "📊 Báo cáo hàng ngày ElderCare\n(Chức năng đang phát triển)"
+    def generate_daily_summary(self, dummy: bool = False) -> str:
+        from alerts.daily_summary import generate_daily_summary
+        return generate_daily_summary(dummy=dummy)
+
+    def send_daily_summary(self, dummy: bool = False) -> bool:
+        summary = self.generate_daily_summary(dummy=dummy)
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat_ids_str = os.getenv("TELEGRAM_CHAT_ID_PRIMARY", "")
+        if not bot_token or not chat_ids_str:
+            logger.info("Telegram not configured -- summary logged only")
+            logger.info("\n%s", summary)
+            return False
+        try:
+            from telegram import Bot
+            if self._telegram_bot is None:
+                self._telegram_bot = Bot(token=bot_token)
+            for chat_id in chat_ids_str.split(","):
+                if chat_id.strip():
+                    self._telegram_bot.send_message(chat_id=chat_id.strip(), text=summary)
+                    logger.info("Daily summary sent to chat_id=%s", chat_id.strip())
+            return True
+        except Exception:
+            logger.exception("Failed to send daily summary via Telegram")
+            return False
 
 
 if __name__ == "__main__":

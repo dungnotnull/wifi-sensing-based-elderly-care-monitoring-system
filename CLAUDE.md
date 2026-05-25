@@ -46,34 +46,31 @@ eldercare/
 
 ## RuView Dependencies — What We Inherit vs. What We Build
 
-ElderCare leverages RuView's battle-tested infrastructure. The rule is: **import from RuView for signal processing, ingestion, and vital signs; keep only what is ElderCare-specific.**
+ElderCare leverages RuView where it provides battle-tested infrastructure: **use wifi_densepose Rust extractors for vitals; build signal processing, ingestion, and models as custom Python.**
 
-### ✅ Imported from RuView (`wifi_densepose` package)
+### ✅ From RuView (`wifi_densepose` Python package, v2.0.0a1+)
 
-| RuView Component | Used For |
+| RuView Component | How Used |
 |---|---|
+| **BreathingExtractor** | Rust-native 0.1-0.5 Hz bandpass + zero-crossing respiration detector via PyO3 |
+| **HeartRateExtractor** | Rust-native 0.8-2.0 Hz bandpass + autocorrelation heart rate detector via PyO3 |
 | ESP32-S3 CSI Firmware | Raw CSI capture at 50 Hz, HT20 mode, 52 subcarriers |
-| Hampel Filter | Impulse noise removal from CSI amplitude |
-| Phase Sanitizer | Unwrapping + linear detrend + Butterworth bandpass |
-| Amplitude Normalization | Per-subcarrier z-score with EMA running stats |
-| Breathing Extractor | FFT-based respiration rate (0.1–0.5 Hz band) |
-| Heart Rate Extractor | FFT-based HR (0.8–2.0 Hz band, experimental) |
-| MQTT Client + Ring Buffers | CSI packet ingestion + validation |
-| Vital Anomaly Detector | Apnea, tachypnea, bradycardia detection |
 
-### 🔧 ElderCare-Specific (Custom Code)
+### 🔧 ElderCare Custom (Python)
 
-| ElderCare Module | Why Custom |
+| ElderCare Module | Why Custom / Not in RuView |
 |---|---|
-| **CSI-FallNet** (`models/fall_detection/`) | Fine-tuned on ElderAL-CSI for elderly motion patterns |
-| **TwoStageConfirmer** | Confidence threshold (0.85) + 3-second inactivity re-check |
-| **SleepLSTM + SleepScorer** | No RuView equivalent — sleep staging and quality score are elderly-care-specific |
-| **Alert Manager** (`alerts/`) | Vietnamese Telegram messages, 3-level cooldown, caregiver-oriented |
-| **Activity Detector** | Day/night context (suppress alerts during sleep hours 10PM-6AM) |
-| **Caregiver Dashboard** (`dashboard/`) | Simplified UI, 16px minimum font, Vietnamese labels |
-| **Configs** (`configs/`) | Elderly-appropriate thresholds, Vietnamese zone names, MQTT topics |
+| **Preprocessor** (`pipeline/preprocessor.py`) | Hampel, Butterworth, phase sanitization, z-score. Faithful scipy reimplementation of RuView's Rust signal chain |
+| **MQTT Ingestion** (`ingestion/receiver.py`) | Per-zone MQTT routing. RuView uses UDP — MQTT chosen for multi-zone topic separation |
+| **VitalsAdapter** (`models/vital_signs/estimator.py`) | Stateful Python wrapper feeding per-frame amplitude residuals to wifi_densepose Rust extractors |
+| **CSI-FallNet** (`models/fall_detection/`) | 1D-CNN→BiLSTM, fine-tunable on ElderAL-CSI |
+| **TwoStageConfirmer** | 0.85 confidence + 3-second inactivity re-check |
+| **SleepLSTM + SleepScorer** | No RuView equivalent — sleep staging and quality score |
+| **Alert Manager** (`alerts/`) | Vietnamese Telegram, 3-level cooldown |
+| **Activity Detector** | Day/night context, post-fall recovery monitoring |
+| **Caregiver Dashboard** (`dashboard/`) | FastAPI + React, 16px min font, VN labels |
 
-**Rule of thumb:** If a module implements pure signal processing (filters, FFT, phase math), it should be imported from RuView. If it encodes elderly-care-specific logic (alert levels, sleep scoring, daytime awareness), it belongs in ElderCare.
+**Rule of thumb:** Vitals extraction goes through `wifi_densepose` (Rust). Signal preprocessing and ingestion are faithful Python reimplementations — the former matching RuView's Rust signal chain, the latter using MQTT (an architectural choice over RuView's UDP). Everything elderly-care-specific (models, alerts, dashboard) is custom.
 
 ---
 
@@ -81,9 +78,9 @@ ElderCare leverages RuView's battle-tested infrastructure. The rule is: **import
 
 | Layer | Technology |
 |---|---|
-| CSI Capture | ESP32-S3 (esp-idf CSI API) — RuView firmware |
+| CSI Capture | ESP32-S3 (esp-idf CSI API) |
 | Transport | MQTT (Mosquitto broker) |
-| Signal Processing | RuView signal chain (Hampel, bandpass, phase sanitization) |
+| Signal Processing | Custom Python (scipy reimplementation of RuView signal chain) |
 | Deep Learning | PyTorch — CNN, BiLSTM (FallNet), LSTM (Sleep) |
 | Inference Server | FastAPI (async) + multiprocessing queue |
 | Dashboard | React (caregiver UI) |
@@ -104,8 +101,8 @@ ElderCare leverages RuView's battle-tested infrastructure. The rule is: **import
 - **Training pipeline:** CSI-Bench pre-training → ElderAL-CSI fine-tuning → in-situ data
 
 ### 2. Vital Signs (`models/vital_signs/`)
-- **Respiration:** RuView FFT engine on phase variance (0.1–0.5 Hz band)
-- **Heart Rate:** RuView engine (0.8–2.0 Hz, experimental — marked as such in UI)
+- **Respiration:** `wifi_densepose.BreathingExtractor` — Rust-native 0.1-0.5 Hz bandpass + zero-crossing
+- **Heart Rate:** `wifi_densepose.HeartRateExtractor` — Rust-native 0.8-2.0 Hz bandpass + autocorrelation (experimental)
 - **Output:** BPM estimates updated every 5 seconds
 
 ### 3. Sleep Quality (`models/sleep/`)
@@ -127,10 +124,10 @@ ElderCare leverages RuView's battle-tested infrastructure. The rule is: **import
 ESP32-S3 (RuView firmware, CSI capture @ 50 Hz)
     │  MQTT — topic: eldercare/csi/{zone_id}
     ▼
-ingestion/receiver.py  ──► RuView MQTT client + ring buffer (5s)
+ingestion/receiver.py  ──► MQTT client + ring buffer (5s)
     │
     ▼
-RuView Signal Processing
+ElderCare Signal Processing (scipy, faithful to RuView Rust chain)
     ├── Hampel filter (outlier removal)
     ├── Butterworth bandpass
     ├── Phase sanitization (unwrapping + linear detrend)
@@ -139,7 +136,7 @@ RuView Signal Processing
     ▼
 pipeline/inference_engine.py  (multiprocessing, one process per model)
     ├── FallDetector (CSI-FallNet + TwoStageConfirmer)
-    ├── VitalSignsEstimator (RuView FFT engine)
+    ├── VitalSignsEstimator (wifi_densepose Rust extractors)
     ├── SleepMonitor (ElderCare SleepLSTM)
     └── ActivityTracker (rule-based + day/night context)
     │
@@ -178,7 +175,7 @@ Key config files:
 
 ## Development Rules
 
-1. **Import RuView, don't rebuild.** If RuView provides it (signal processing, vitals, ingestion), import it. Only build ElderCare-specific logic.
+1. **Leverage RuView where it fits.** Vitals extraction uses `wifi_densepose` Rust PyO3 bindings. Signal preprocessing and MQTT ingestion are faithful Python reimplementations optimized for ElderCare's multi-zone architecture.
 2. **Never commit secrets.** Use `.env` files. Telegram tokens, API keys must never appear in git history.
 3. **Preprocessing is RuView's domain.** Do not modify signal processing chain without updating both CLAUDE.md and PROJECT-DETAIL.md.
 4. **Use type hints.** All Python functions must have type annotations.

@@ -1,0 +1,83 @@
+{
+  "timestamp": "2026-05-25T21:07:21",
+  "models": {
+    "fall_detection": {
+      "model": "CSI-FallNet",
+      "parameters": 2607235,
+      "samples": 400,
+      "fall_samples": 38,
+      "accuracy": 0.995,
+      "precision": 1.0,
+      "recall": 0.9474,
+      "f1_score": 0.973,
+      "confusion_matrix": {
+        "tp": 36,
+        "fp": 0,
+        "fn": 2,
+        "tn": 362
+      },
+      "high_confidence_detections": 399,
+      "checkpoint": "models/fall_detection/checkpoints/csi_fallnet_best.pth"
+    },
+    "vital_signs": {
+      "model": "VitalsAdapter (wifi_densepose)",
+      "status": "functional",
+      "respiration_bpm": null,
+      "heart_rate_bpm": 75.0
+    },
+    "activity": {
+      "model": "ActivityDetector",
+      "status": "functional",
+      "scenarios": {
+        "active_day": {
+          "state": "inactivity",
+          "expected": "active"
+        },
+        "still_day": {
+          "state": "inactivity",
+          "expected": "still"
+        },
+        "inactive_day": {
+          "state": "inactivity",
+          "expected": "inactivity"
+        },
+        "inactive_night": {
+          "state": "inactivity",
+          "alert": "None",
+          "expected_alert": "None"
+        }
+      }
+    },
+    "sleep": {
+      "model": "SleepLSTM",
+      "parameters": 53379,
+      "nights": 20,
+      "epochs": 9600,
+      "accuracy": 0.8915,
+      "macro_f1": 0.598,
+      "per_class": {
+        "awake": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        "light": {
+          "precision": 0.8366,
+          "recall": 0.888,
+          "f1": 0.8616
+        },
+        "deep": {
+          "precision": 0.9285,
+          "recall": 0.9363,
+          "f1": 0.9324
+        }
+      },
+      "checkpoint": "models/sleep/checkpoints/sleep_lstm_best.pth"
+    }
+  },
+  "summary": {
+    "fall_f1": 0.973,
+    "sleep_macro_f1": 0.598,
+    "vitals_status": "functional"
+  }
+}

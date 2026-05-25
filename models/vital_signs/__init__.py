@@ -1,13 +1,10 @@
-"""Vital signs estimation — FFT-based respiration + heart rate.
+"""Vital signs estimation via wifi_densepose Rust-native extractors.
 
-RuView-compatible implementation. Mirrors the algorithm in RuView's
-wifi-densepose-vitals crate (breathing.rs, heartrate.rs):
-  - Bandpass: 0.1-0.5 Hz (respiration), 0.8-2.0 Hz (heart rate)
-  - Top-K subcarrier selection by signal variance
-  - FFT peak frequency detection
+The VitalsAdapter wraps wifi_densepose's BreathingExtractor and
+HeartRateExtractor — stateful Rust objects that accumulate per-frame
+amplitude residuals and return VitalEstimate results when sufficient
+history is available.
 
-RuView source reference:
-  v2/crates/wifi-densepose-vitals/src/breathing.rs
-  v2/crates/wifi-densepose-vitals/src/heartrate.rs
+Breathing extractor: 0.1-0.5 Hz bandpass + zero-crossing analysis.
+Heart rate extractor: 0.8-2.0 Hz bandpass + autocorrelation peak detection.
 """
-

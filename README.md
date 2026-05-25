@@ -11,7 +11,7 @@
 
 **ElderCare** is a privacy-preserving elderly monitoring system that uses **WiFi CSI (Channel State Information)** — subtle disturbances in ambient WiFi signals caused by human movement and breathing — to detect falls, estimate vital signs, and track activity patterns without cameras or wearables.
 
-Built on and extending the open-source [RuView](https://github.com/ruvnet/RuView) WiFi sensing platform, ElderCare is customized for elderly care in Vietnamese households. It leverages RuView's battle-tested signal processing, CSI ingestion, and vital sign extraction while adding elder-specific models, alerting, and a caregiver-friendly dashboard.
+Built on and extending the open-source [RuView](https://github.com/ruvnet/RuView) WiFi sensing platform, ElderCare is customized for elderly care in Vietnamese households. It leverages RuView's Rust-native vitals extractors (`wifi_densepose` package) while providing custom signal preprocessing, MQTT ingestion, and elder-specific AI models, alerting, and a caregiver-friendly dashboard.
 
 ### Why WiFi CSI?
 
@@ -52,15 +52,15 @@ WiFi signals already fill every home. Human bodies — even breathing — subtly
 ESP32-S3 (CSI capture @ 50Hz)
     │  MQTT (eldercare/csi/{zone_id})
     ▼
-RuView Ingestion Layer (MQTT receiver + ring buffers)
+ElderCare Ingestion Layer (MQTT receiver + ring buffers)
     │
     ▼
-RuView Signal Processing (Hampel → Bandpass → Phase sanitization → Z-score)
+ElderCare Signal Processing (Hampel → Bandpass → Phase sanitization → Z-score)
     │
     ▼
 ElderCare Inference Engine
     ├── FallDetector (two-stage: CNN+BiLSTM + confirmation)
-    ├── VitalSignsEstimator (RuView FFT engine)
+    ├── VitalSignsEstimator (wifi_densepose Rust extractors)
     ├── SleepMonitor (ElderCare SleepLSTM → Sleep Score)
     └── ActivityTracker (rule-based + day/night context)
     │
@@ -71,29 +71,25 @@ ElderCare Alert Manager ──► Telegram / Log / InfluxDB
 ElderCare Dashboard (FastAPI + React) ──► Browser UI
 ```
 
-### RuView Components We Depend On
+### RuView Components We Use
 
-| RuView Component | Used For |
+| RuView Component | How Used |
 |---|---|
 | ESP32-S3 CSI Firmware | Raw CSI capture at 50 Hz, 52 subcarriers |
-| Hampel Filter | Impulse noise removal |
-| Phase Sanitizer | Unwrapping + detrend + Butterworth filtering |
-| Amplitude Normalization | Per-subcarrier z-score |
-| Breathing Extractor | FFT-based respiration rate (0.1–0.5 Hz band) |
-| Heart Rate Extractor | FFT-based HR (0.8–2.0 Hz, experimental) |
-| MQTT Client | CSI packet ingestion via Mosquitto |
-| Vital Anomaly Detector | Apnea/tachypnea/bradycardia detection |
+| **BreathingExtractor** | Rust-native 0.1-0.5 Hz bandpass + zero-crossing (PyO3) |
+| **HeartRateExtractor** | Rust-native 0.8-2.0 Hz bandpass + autocorrelation (PyO3) |
 
-### ElderCare-Specific Additions
+### ElderCare Custom Components
 
 | ElderCare Component | Value Add |
 |---|---|
-| CSI-FallNet Model | Fine-tuned on ElderAL-CSI for elderly fall detection |
-| Two-Stage Confirmer | 0.85 confidence + 3-second inactivity window |
-| SleepLSTM + Sleep Scorer | Sleep staging + quality score (0–100) |
-| Alert Manager | Vietnamese Telegram alerts, 3-level cooldown system |
-| Caregiver Dashboard | Simplified UI, 16px font, Vietnamese labels |
-| Multi-Zone YAML Config | Room definitions, thresholds tuned for Vietnamese homes |
+| **Signal Preprocessor** | Hampel + Butterworth + phase sanitization (faithful scipy reimplementation) |
+| **MQTT Ingestion** | Per-zone MQTT routing with ring buffers |
+| **CSI-FallNet Model** | Fine-tuned on ElderAL-CSI for elderly fall detection |
+| **Two-Stage Confirmer** | 0.85 confidence + 3-second inactivity window |
+| **SleepLSTM + Sleep Scorer** | Sleep staging + quality score (0–100) |
+| **Alert Manager** | Vietnamese Telegram alerts, 3-level cooldown system |
+| **Caregiver Dashboard** | Simplified UI, 16px font, Vietnamese labels |
 
 ---
 
