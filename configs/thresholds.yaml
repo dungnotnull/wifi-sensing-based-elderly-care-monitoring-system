@@ -1,0 +1,40 @@
+# ElderCare Detection Thresholds
+#
+# All threshold values used by the inference pipeline and alert manager.
+# Tune these values based on deployment environment.
+
+inactivity:
+  # Prolonged inactivity timeout in seconds (triggers WARNING alert)
+  timeout_seconds: 7200               # 2 hours
+  # Daytime window — inactivity alerts suppressed outside this range
+  daytime_start_hour: 6               # 6:00 AM
+  daytime_end_hour: 22                # 10:00 PM
+
+fall_detection:
+  # Two-stage confirmation
+  initial_confidence_threshold: 0.85   # model softmax confidence
+  confirmation_window_seconds: 3.0     # re-check window after initial trigger
+  inactivity_threshold: 0.15           # CSI variance below this = likely fallen
+  recovery_timeout_seconds: 30         # EMERGENCY if no recovery within this
+
+vital_signs:
+  # Respiration rate bounds (breaths per minute)
+  respiration_min: 8
+  respiration_max: 25
+  # Abnormal breathing must sustain for this many seconds before alerting
+  abnormal_sustain_seconds: 60
+
+  # Heart rate bounds (experimental)
+  heart_rate_min: 50
+  heart_rate_max: 120
+
+sleep:
+  # Sleep session auto-detection window (hours)
+  session_min_duration_hours: 3.0
+  session_inactivity_threshold: 0.08   # CSI variance below this considered "still"
+
+activity:
+  # CSI amplitude variance thresholds
+  threshold_active: 0.5
+  threshold_still: 0.15
+  window_seconds: 30                   # sliding window for variance computation

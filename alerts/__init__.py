@@ -1,0 +1,1 @@
+"""ElderCare alert manager."""
