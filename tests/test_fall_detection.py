@@ -123,6 +123,7 @@ class TestFallDetectionWorkerIntegration:
         )
 
         # Verify worker has a FallDetector instance
+        worker._ensure_model()
         assert worker._detector is not None
         assert worker._confirmer is not None
         assert worker._fall_event_queue is fall_event_q

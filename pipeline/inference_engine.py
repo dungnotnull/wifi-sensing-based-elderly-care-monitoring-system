@@ -11,7 +11,6 @@ import multiprocessing as mp
 import os
 import queue
 import signal
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
@@ -61,7 +60,7 @@ class InferenceWorker(mp.Process):
 
     def run(self) -> None:
         logger.info(f"[{self.model_name}] Worker started for zone={self.zone_id}")
-        signal.signal(signal.SIGINT, signal.SIG_IGN)  # parent handles SIGINT
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
         while not self.stop_event.is_set():
             try:
@@ -80,6 +79,10 @@ class InferenceWorker(mp.Process):
         """Override in subclass to implement model-specific inference."""
         raise NotImplementedError
 
+    def process(self, packet: dict) -> Optional[InferenceResult]:
+        """Override in subclass to implement model-specific inference."""
+        raise NotImplementedError
+
 
 class FallDetectionWorker(InferenceWorker):
     """Fall detection inference worker with TwoStageConfirmer."""
@@ -88,7 +91,14 @@ class FallDetectionWorker(InferenceWorker):
         super().__init__(*args, **kwargs)
         self._window_size = self.config.get("window_size", 100)
         self._buffer: list[dict] = []
+        self._detector = None
+        self._confirmer = None
+        self._fall_event_queue = fall_event_queue
 
+    def _ensure_model(self) -> None:
+        """Lazy-initialize model on first use (avoids blocking process spawn)."""
+        if self._detector is not None:
+            return
         from models.fall_detection.model import FallDetector, TwoStageConfirmer
 
         self._detector = FallDetector(
@@ -103,9 +113,9 @@ class FallDetectionWorker(InferenceWorker):
             inactivity_threshold=self.config.get("inactivity_threshold", 0.15),
             sample_rate=self.config.get("sample_rate", 50.0),
         )
-        self._fall_event_queue = fall_event_queue
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
+        self._ensure_model()
         self._buffer.append(packet)
         if len(self._buffer) > self._window_size:
             self._buffer.pop(0)
@@ -225,7 +235,15 @@ class ActivityWorker(InferenceWorker):
             self.config.get("window_seconds", 30.0) * self.config.get("sample_rate", 50.0)
         )
         self._buffer: list[dict] = []
+        self._detector = None
+        self._post_fall_checker = None
+        self._fall_event_queue = fall_event_queue
+        self._inactivity_start: Optional[float] = None
 
+    def _ensure_model(self) -> None:
+        """Lazy-initialize model on first use (avoids blocking process spawn)."""
+        if self._detector is not None:
+            return
         from models.activity.detector import ActivityDetector, PostFallInactivityChecker
 
         self._detector = ActivityDetector(
@@ -241,15 +259,14 @@ class ActivityWorker(InferenceWorker):
         self._post_fall_checker = PostFallInactivityChecker(
             recovery_timeout_seconds=self.config.get("recovery_timeout_seconds", 30.0),
         )
-        self._fall_event_queue = fall_event_queue
-        self._inactivity_start: Optional[float] = None
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
+        self._ensure_model()
         self._buffer.append(packet)
         if len(self._buffer) > self._window_frames:
             self._buffer.pop(0)
 
-        if len(self._buffer) < self._window_frames // 2:
+        if len(self._buffer) < self._window_frames // 10:
             return None
 
         # Check for fall events from FallDetectionWorker
@@ -301,9 +318,8 @@ class ActivityWorker(InferenceWorker):
 class InferenceEngine:
     """Orchestrates all inference workers.
 
-    Consumes CSI from the ingestion layer (via shared queue),
-    runs preprocessing, fans out to inference workers, and
-    collects results onto the output event bus.
+    Consumes CSI from the ingestion layer, fans out to per-zone
+    inference workers, and collects results onto the output event bus.
     """
 
     def __init__(self, config_path: str = "configs/zones.yaml") -> None:
@@ -311,11 +327,11 @@ class InferenceEngine:
         self.config = self._load_config()
 
         self.zones = self.config.get("zones", [])
-        self.input_queue = mp.Queue(maxsize=500)
-        self.output_queue = mp.Queue(maxsize=500)
+        self.output_queue = mp.Queue(maxsize=2000)
 
         self.stop_event = mp.Event()
         self.workers: list[InferenceWorker] = []
+        self._zone_queues: dict[str, list[mp.Queue]] = {}
         self._create_workers()
 
     def _load_config(self) -> dict:
@@ -372,10 +388,14 @@ class InferenceEngine:
             for wcls, worker_config in worker_configs:
                 worker_name = f"{wcls.__name__.replace('Worker', '')}_{zid}"
 
+                # Each worker gets its own input queue to guarantee
+                # every worker receives every packet for its zone.
+                worker_queue = mp.Queue(maxsize=2000)
+
                 kwargs: dict[str, Any] = {
                     "name": worker_name,
                     "zone_id": zid,
-                    "input_queue": self.input_queue,
+                    "input_queue": worker_queue,
                     "output_queue": self.output_queue,
                     "stop_event": self.stop_event,
                     "config": worker_config,
@@ -387,6 +407,9 @@ class InferenceEngine:
 
                 worker = wcls(**kwargs)
                 self.workers.append(worker)
+
+                # Track worker queues for feed_packet routing
+                self._zone_queues.setdefault(zid, []).append(worker_queue)
 
     def start(self) -> None:
         logger.info(f"Starting inference engine with {len(self.workers)} workers across {len(self.zones)} zones")
@@ -403,11 +426,20 @@ class InferenceEngine:
         logger.info("Inference engine stopped")
 
     def feed_packet(self, zone_id: str, packet: dict) -> None:
-        """Feed a preprocessed CSI packet to all workers for the given zone."""
-        try:
-            self.input_queue.put({"zone_id": zone_id, "packet": packet}, timeout=1.0)
-        except queue.Full:
-            logger.warning("Input queue full, dropping packet")
+        """Feed a preprocessed CSI packet to all workers for the given zone.
+
+        Puts one copy on each worker's dedicated input queue so that every
+        worker (fall, vital, sleep, activity) receives its own copy.
+        """
+        worker_queues = self._zone_queues.get(zone_id)
+        if not worker_queues:
+            logger.warning(f"No queue for zone {zone_id}, dropping packet")
+            return
+        for wq in worker_queues:
+            try:
+                wq.put(packet, timeout=1.0)
+            except queue.Full:
+                logger.warning(f"Queue full for zone {zone_id}, dropping packet")
 
     def get_results(self, timeout: float = 0.1) -> list[InferenceResult]:
         """Non-blocking fetch of inference results."""

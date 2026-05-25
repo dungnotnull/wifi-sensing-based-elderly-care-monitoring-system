@@ -66,5 +66,6 @@ class TestActivityWorkerIntegration:
             fall_event_queue=mp.Queue(),
         )
 
+        worker._ensure_model()
         assert worker._detector is not None
         assert worker._post_fall_checker is not None

@@ -35,8 +35,8 @@ class TestEndToEndPipeline:
             pkt = sim.generate_packet()
             engine.feed_packet(zone_id, pkt)
 
-        # Wait for workers to process
-        time.sleep(1.0)
+        # Wait for workers to process (includes lazy model init)
+        time.sleep(5.0)
 
         results = engine.get_results()
         return [r for r in results if r.zone_id == zone_id]
@@ -100,7 +100,7 @@ class TestEndToEndPipeline:
                     pkt = sim.generate_packet()
                     engine.feed_packet(zone_id, pkt)
 
-            time.sleep(1.0)
+            time.sleep(5.0)
             results = engine.get_results()
 
             zone_ids = {r.zone_id for r in results}
