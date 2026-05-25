@@ -217,13 +217,32 @@ class SleepWorker(InferenceWorker):
 
 
 class ActivityWorker(InferenceWorker):
-    """Activity / inactivity detection worker."""
+    """Activity / inactivity detection worker with day/night awareness and post-fall monitoring."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, fall_event_queue: Optional[mp.Queue] = None, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._window_frames = int(self.config.get("window_seconds", 30.0) * self.config.get("sample_rate", 50.0))
+        self._window_frames = int(
+            self.config.get("window_seconds", 30.0) * self.config.get("sample_rate", 50.0)
+        )
         self._buffer: list[dict] = []
-        self._state: str = "active"
+
+        from models.activity.detector import ActivityDetector, PostFallInactivityChecker
+
+        self._detector = ActivityDetector(
+            threshold_active=self.config.get("threshold_active", 0.5),
+            threshold_still=self.config.get("threshold_still", 0.15),
+            window_seconds=self.config.get("window_seconds", 30.0),
+            sample_rate=self.config.get("sample_rate", 50.0),
+            inactivity_timeout_seconds=self.config.get("inactivity_timeout_seconds", 7200.0),
+            daytime_start_hour=self.config.get("daytime_start_hour", 6),
+            daytime_end_hour=self.config.get("daytime_end_hour", 22),
+        )
+
+        self._post_fall_checker = PostFallInactivityChecker(
+            recovery_timeout_seconds=self.config.get("recovery_timeout_seconds", 30.0),
+        )
+        self._fall_event_queue = fall_event_queue
+        self._inactivity_start: Optional[float] = None
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
         self._buffer.append(packet)
@@ -233,27 +252,49 @@ class ActivityWorker(InferenceWorker):
         if len(self._buffer) < self._window_frames // 2:
             return None
 
+        # Check for fall events from FallDetectionWorker
+        if self._fall_event_queue is not None:
+            while True:
+                try:
+                    fall_event = self._fall_event_queue.get_nowait()
+                    self._post_fall_checker.on_fall_detected(fall_event.timestamp)
+                except Exception:
+                    break
+
         amp = np.array([p["csi_amplitude"] for p in self._buffer])
-        variance = float(np.var(np.mean(np.abs(amp), axis=1)))
 
-        # Rule-based classification
-        if variance > 0.5:
-            new_state = "active"
-        elif variance > 0.15:
-            new_state = "still"
+        # Derive timestamp hour for day/night check
+        from datetime import datetime
+        ts = packet.get("timestamp", 0.0)
+        hour = datetime.fromtimestamp(ts).hour + datetime.fromtimestamp(ts).minute / 60.0
+
+        state, alert = self._detector.update(amp, hour)
+
+        # Track inactivity duration
+        if state == "inactivity":
+            if self._inactivity_start is None:
+                self._inactivity_start = ts
+            inactivity_duration = ts - self._inactivity_start
+            if self._detector.is_prolonged_inactivity(inactivity_duration):
+                alert = "WARNING"
         else:
-            new_state = "inactivity"
+            self._inactivity_start = None
 
-        self._state = new_state
+        # Post-fall emergency check
+        post_fall_alert = self._post_fall_checker.check(amp, ts)
+
+        data = {
+            "state": state,
+            "alert": alert,
+        }
+        if post_fall_alert is not None:
+            data["post_fall_alert"] = post_fall_alert
 
         return InferenceResult(
             zone_id=self.zone_id,
             model_name="activity",
             timestamp=packet["timestamp"],
-            data={
-                "state": new_state,
-                "variance": variance,
-            },
+            data=data,
         )
 
 

@@ -34,3 +34,37 @@ class TestActivityDetector:
         assert detector.is_daytime(14.0) is True
         assert detector.is_daytime(3.0) is False
         assert detector.is_daytime(23.0) is False
+
+
+class TestActivityWorkerIntegration:
+    def test_worker_uses_activity_detector(self) -> None:
+        import multiprocessing as mp
+        from pipeline.inference_engine import ActivityWorker
+
+        input_q: mp.Queue = mp.Queue()
+        output_q: mp.Queue = mp.Queue()
+        stop = mp.Event()
+
+        config = {
+            "sample_rate": 50.0,
+            "window_seconds": 30.0,
+            "threshold_active": 0.5,
+            "threshold_still": 0.15,
+            "inactivity_timeout_seconds": 7200.0,
+            "daytime_start_hour": 6,
+            "daytime_end_hour": 22,
+            "recovery_timeout_seconds": 30.0,
+        }
+
+        worker = ActivityWorker(
+            name="Activity_zone_test",
+            zone_id="zone_test",
+            input_queue=input_q,
+            output_queue=output_q,
+            stop_event=stop,
+            config=config,
+            fall_event_queue=mp.Queue(),
+        )
+
+        assert worker._detector is not None
+        assert worker._post_fall_checker is not None
