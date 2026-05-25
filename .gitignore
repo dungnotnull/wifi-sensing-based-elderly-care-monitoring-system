@@ -1,0 +1,58 @@
+# ElderCare .gitignore
+# Privacy-preserving WiFi-based elderly monitoring system
+
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Data (raw CSI captures, annotations, recordings)
+data/raw/*
+data/processed/*
+data/annotations/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/annotations/.gitkeep
+
+# Model checkpoints (heavy files)
+models/*/checkpoints/
+*.pth
+*.pt
+*.ckpt
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Node (dashboard frontend)
+dashboard/frontend/node_modules/
+dashboard/frontend/build/
+
+# CommandCode taste (local only)
+.commandcode/

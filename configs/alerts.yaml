@@ -1,0 +1,30 @@
+# ElderCare Alert Configuration
+#
+# Alert manager: levels, cooldowns, and Telegram bot settings.
+# Bot token and chat IDs are loaded from .env — do NOT hardcode them here.
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"        # loaded from .env
+  chat_ids:
+    - "${TELEGRAM_CHAT_ID_PRIMARY}"         # primary caregiver
+    # - "${TELEGRAM_CHAT_ID_SECONDARY}"     # optional secondary caregiver
+
+alert_levels:
+  INFO:
+    description: "Normal daily summary / status update"
+    cooldown_seconds: 3600                 # 1 hour between INFO messages
+
+  WARNING:
+    description: "Abnormal condition (inactivity, irregular breathing)"
+    cooldown_seconds: 300                  # 5 minutes between WARNING messages
+
+  EMERGENCY:
+    description: "Fall detected / no recovery / life-threatening"
+    cooldown_seconds: 60                   # 1 minute between EMERGENCY messages
+
+daily_summary:
+  enabled: true
+  time_local: "07:00"                      # send morning report at 7:00 AM
+  timezone: "Asia/Ho_Chi_Minh"
+
+language: "vi"                             # alert messages in Vietnamese
