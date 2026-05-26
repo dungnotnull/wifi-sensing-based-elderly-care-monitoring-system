@@ -1,8 +1,8 @@
 # PROJECT-DETAIL.md — ElderCare
 
 **ElderCare: WiFi Sensing-Based Elderly Care Monitoring System**
-Version: 0.1 (MVP Specification)
-Last Updated: 2026-05-25
+Version: 0.3 (System Hardening)
+Last Updated: 2026-05-26
 Author: ElderCare Development Team
 
 ---
@@ -508,7 +508,7 @@ Decoupled mapping functions for converting raw datasets into model-ready tensors
 - [x] Write system design document (`docs/architecture.md`) — data flow diagrams, component design, design decisions, directory structure
 - [ ] Record short demo video (deferred — needs hardware)
 - [x] Evaluation module built (pipeline/evaluate.py). Mock evaluation report at data/evaluation/report.json
-- [x] **Dataset mappers built and tested (51 tests pass):** ElderAL-CSI CSV mapper (`training/dataset_mappers/__init__.py`) handles 2TXx3RX MIMO format with 512→52 subcarrier downsampling, sliding window extraction, and path-based label inference. CSI-Bench mapper (`training/dataset_mappers/csibench.py`) supports .npz and .mat formats with documented preprocessing pipeline. Both integrated into `train_fall_detection.py` via `--dataset-type` flag (elderal/csibench/mock/synthetic/auto).
+- [x] **Dataset mappers built and tested (60 tests pass):** ElderAL-CSI CSV mapper (`training/dataset_mappers/__init__.py`) handles 2TXx3RX MIMO format with 512→52 subcarrier downsampling, sliding window extraction, and path-based label inference. CSI-Bench mapper (`training/dataset_mappers/csibench.py`) supports .npz and .mat formats with documented preprocessing pipeline. Both integrated into `train_fall_detection.py` via `--dataset-type` flag (elderal/csibench/mock/synthetic/auto).
 
 **Milestone:** MVP codebase complete. All 51 tests pass. Ready for real-world data and hardware deployment. Dataset mappers ready for real CSI-Bench and ElderAL-CSI data when available. Evaluation, daily summary, and all pipeline components verified on mock data.
 
@@ -622,7 +622,7 @@ Decoupled mapping functions for converting raw datasets into model-ready tensors
 
 **Total codebase:** ~4,841 lines of Python across 38 source files, plus React frontend scaffold, 5 YAML configs, Docker Compose orchestration, and comprehensive documentation.
 
-**Test suite:** 51/51 tests passing (unit + integration + dataset mappers).
+**Test suite:** 60/60 tests passing (51 unit + 9 bridge).
 
 **Phase completion:**
 

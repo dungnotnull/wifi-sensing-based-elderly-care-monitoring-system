@@ -56,8 +56,11 @@ WiFi signals already fill every home. Human bodies — even breathing — subtly
 ## System Architecture
 
 ```
-ESP32-S3 (CSI capture @ 50Hz)
-    │  MQTT (eldercare/csi/{zone_id})
+ESP32-S3 (RuView firmware, CSI capture @ ~20 Hz)
+    │  UDP (ADR-018 binary, port 5005)
+    ▼
+ElderCare UDP-to-MQTT Bridge ──► MQTT (eldercare/csi/{zone_id})
+    │
     ▼
 ElderCare Ingestion Layer (MQTT receiver + ring buffers + CSI Quality Checker)
     │
@@ -91,9 +94,11 @@ ElderCare Dashboard (FastAPI + SSE + React, JWT auth) ──► Browser UI
 
 | RuView Component | How Used |
 |---|---|
-| ESP32-S3 CSI Firmware | Raw CSI capture at 50 Hz, 52 subcarriers |
-| **BreathingExtractor** | Rust-native 0.1-0.5 Hz bandpass + zero-crossing (PyO3) |
-| **HeartRateExtractor** | Rust-native 0.8-2.0 Hz bandpass + autocorrelation (PyO3) |
+| ESP32-S3 CSI Firmware (`esp32-csi-node`, v0.6.5) | Raw CSI capture via ADR-018 binary protocol over UDP |
+| `wifi_densepose` v2.0.0a1 | `BreathingExtractor` + `HeartRateExtractor` (Rust PyO3) |
+| UDP-to-MQTT Bridge | Custom integration layer — converts ADR-018 → MQTT for multi-zone routing |
+
+> **Audit note:** `wifi_densepose` exposes 13 types but only the two extractors are used. RuView's signal processing chain (Hampel/Butterworth/phase) lives in a Rust binary — not importable as Python. Our `pipeline/preprocessor.py` is a faithful scipy reimplementation (130x vectorized). No other RuView Python utilities exist.
 
 ### ElderCare Custom Components
 
@@ -159,14 +164,21 @@ pip install -r requirements.txt
 cp .env.template .env           # Edit .env with Telegram Bot Token + Chat IDs
 # Edit configs/zones.yaml       # Set MAC addresses and zone names
 
-# Run full stack with Docker
+# Run full stack with Docker (3 services: MQTT + UDP bridge + server)
 docker-compose -f docker/docker-compose.yml up --build
 
 # Or run standalone
+# Terminal 1: Start UDP→MQTT bridge (for ESP32 hardware)
+python -m ingestion.udp_mqtt_bridge --config configs/zones.yaml
+# Terminal 2: Start inference engine
 python -m pipeline.inference_engine --config configs/zones.yaml
+# Terminal 3: Dashboard
+uvicorn dashboard.backend.main:app --host 0.0.0.0 --port 8000
 
-# Dashboard
-uvicorn dashboard.backend.main:app --host 0.0.0.0.0 --port 8000
+# Without hardware: simulate CSI data for development
+python -c "from firmware.esp32_csi.csi_simulator import CSISimulator; \
+  sim = CSISimulator(); sim.set_state('breathing'); \
+  [print(sim.generate_packet()) for _ in range(5)]"
 
 # Record CSI data for offline replay
 python -c "from pipeline.record_replay import CSIRecorder; \
@@ -187,8 +199,12 @@ python -m pipeline.evaluate
 
 ```
 eldercare/
-├── firmware/esp32_csi/    # ESP32-S3 CSI capture spec + realistic simulator
-├── ingestion/             # MQTT ingestion wrapper
+├── firmware/
+│   ├── esp32_csi/         # CSI packet spec + realistic simulator (6 noise layers)
+│   └── esp32-csi-node/    # RuView ESP32-S3 firmware (C, esp-idf v5.2, v0.6.5)
+├── ingestion/
+│   ├── udp_mqtt_bridge.py # UDP-to-MQTT bridge (ADR-018 binary → MQTT topics)
+│   └── receiver.py        # MQTT ingestion + ring buffers + quality gate
 ├── models/
 │   ├── fall_detection/    # ElderCare CSI-FallNet + TwoStageConfirmer
 │   ├── vital_signs/       # wifi_densepose adapter + Python scipy fallback
@@ -214,7 +230,7 @@ eldercare/
 │   ├── telemetry.py       # Local telemetry (Prometheus format)
 │   ├── multi_person.py    # Multi-person occupancy detection
 │   ├── performance_tracker.py  # Confusion matrix + per-class metrics
-│   └── degradation.py     # Graceful degradation hierarchy (7 components)
+│   ├── degradation.py     # Graceful degradation hierarchy (7 components)
 ├── alerts/
 │   ├── alert_manager.py   # Telegram + Webhook dispatch (circuit breaker)
 │   └── i18n.py            # Vietnamese + English locale support
@@ -226,7 +242,7 @@ eldercare/
 ├── configs/               # YAML configs (zones, thresholds, alerts, models)
 │   └── locales/           # i18n locale files (vi.yaml, en.yaml)
 ├── training/              # Fine-tuning scripts + dataset mappers
-├── tests/                 # Test suite (51 unit + 1 Docker E2E)
+├── tests/                 # Test suite (60 tests: 51 unit + 9 bridge + 1 Docker E2E)
 ├── docker/                # Docker Compose deployment
 └── data/                  # CSI datasets + annotations (gitignored)
 ```
@@ -261,7 +277,7 @@ All datasets are free and publicly available:
 ## Running Tests
 
 ```bash
-# Run all 51 tests
+# Run all 60 tests
 pytest tests/ -v
 
 # Run with coverage (target: 70% for pipeline/ and models/)

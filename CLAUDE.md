@@ -19,8 +19,13 @@
 
 ```
 eldercare/
-├── firmware/esp32_csi/     # ESP32-S3 firmware spec + realistic CSI simulator
-├── ingestion/              # MQTT ingestion wrapper (zone routing for ElderCare topics)
+├── firmware/
+│   ├── esp32_csi/         # ESP32-S3 firmware spec + realistic CSI simulator
+│   └── esp32-csi-node/    # RuView ESP32-S3 firmware (C, esp-idf v5.2, v0.6.5)
+├── ingestion/              # MQTT + UDP ingestion (zone routing for ElderCare topics)
+│   ├── udp_mqtt_bridge.py # UDP-to-MQTT bridge (ADR-018 binary → MQTT)
+│   ├── receiver.py        # MQTT subscriber + ring buffers + quality gate
+│   └── __init__.py
 ├── models/                 # ElderCare-specific models
 │   ├── fall_detection/     # CSI-FallNet, TwoStageConfirmer, TemperatureScaling, ConfidenceSmoother
 │   ├── vital_signs/        # Adapter over wifi_densepose + python_fallback
@@ -79,7 +84,9 @@ eldercare/
 
 ## RuView Dependencies -- What We Inherit vs. What We Build
 
-ElderCare leverages RuView where it provides battle-tested infrastructure: **use wifi_densepose Rust extractors for vitals; build signal processing, ingestion, and models as custom Python.**
+ElderCare uses exactly **two** reusable components from RuView: `wifi_densepose` (Rust PyO3 vitals extractors) and the ESP32-S3 firmware. Everything else is custom ElderCare code.
+
+**Audit result (2026-05-26):** `wifi_densepose` v2.0.0a1 exposes 13 types but only `BreathingExtractor` and `HeartRateExtractor` are used. The remaining types (`PersonPose`, `Keypoint`, `BfldFrame`, `PoseEstimate`, etc.) are pose estimation data structures with no pre-trained weights in the repository. RuView's signal processing chain (Hampel, Butterworth, phase sanitization) is compiled into a Rust server binary — **not importable as Python**. Our `pipeline/preprocessor.py` is a faithful scipy reimplementation (130x vectorized speedup). No RuView Python utilities for CSI parsing, zone management, or configuration exist.
 
 ### From RuView (`wifi_densepose` Python package, v2.0.0a1+)
 
@@ -87,7 +94,7 @@ ElderCare leverages RuView where it provides battle-tested infrastructure: **use
 |---|---|
 | **BreathingExtractor** | Rust-native 0.1-0.5 Hz bandpass + zero-crossing respiration detector via PyO3 |
 | **HeartRateExtractor** | Rust-native 0.8-2.0 Hz bandpass + autocorrelation heart rate detector via PyO3 |
-| ESP32-S3 CSI Firmware | Raw CSI capture at 50 Hz, HT20 mode, 52 subcarriers |
+| ESP32-S3 CSI Firmware | ADR-018 binary protocol, ~20 Hz capture, UDP transport. Bridged via `udp_mqtt_bridge.py` |
 
 ### ElderCare Custom (Python)
 
@@ -188,8 +195,11 @@ ElderCare leverages RuView where it provides battle-tested infrastructure: **use
 ## Data Pipeline
 
 ```
-ESP32-S3 (RuView firmware, CSI capture @ 50 Hz)
-    |  MQTT -- topic: eldercare/csi/{zone_id}
+ESP32-S3 (RuView firmware, ADR-018 binary CSI capture @ ~20 Hz)
+    |  UDP -- port 5005
+    v
+ingestion/udp_mqtt_bridge.py  --> Decode I/Q, convert to amplitude/phase
+    |  64→52 subcarrier downsample + node_id→zone_id mapping
     v
 ingestion/receiver.py  --> MQTT client + ring buffer (5s)
     |
@@ -222,7 +232,7 @@ pipeline/shadow_mode.py --> Gate: log predictions silently OR pass to alerts
     |  Shadow mode enabled: predictions logged to data/shadow_mode/ only
     |  Shadow mode disabled: predictions flow to alert manager
     v
-alerts/alert_manager.py + alerts/i18n.py --> Telegram (VI/EN templates) / log
+alerts/alert_manager.py + alerts/i18n.py --> Telegram/Webhook (VI/EN templates) / log
     |
     +--> pipeline/homeassistant.py --> Home Assistant MQTT state updates
     v
@@ -295,8 +305,19 @@ Minimum coverage target: **70%** for `pipeline/` and `models/` modules.
 # Start full stack (local dev)
 docker-compose -f docker/docker-compose.yml up --build
 
+# Run UDP→MQTT bridge (for ESP32 hardware)
+python -m ingestion.udp_mqtt_bridge --config configs/zones.yaml
+
 # Run inference pipeline standalone
 python -m pipeline.inference_engine --config configs/zones.yaml
+
+# Run dashboard (login at http://localhost:8000, default admin/eldercare)
+uvicorn dashboard.backend.main:app --host 0.0.0.0 --port 8000
+
+# Simulate CSI data without hardware
+python -c "from firmware.esp32_csi.csi_simulator import CSISimulator; \
+  sim = CSISimulator(); sim.set_state('breathing'); \
+  [print(sim.generate_packet()) for _ in range(5)]"
 
 # Fine-tune fall detection model
 python training/train_fall_detection.py \
@@ -337,12 +358,14 @@ python -c "from pipeline.quantization import quantize_from_checkpoint; quantize_
 
 ## Known Limitations
 
-- **Single-person assumption:** Current models assume a single occupant per zone. Multi-person CSI is unsupported in MVP.
+- **Single-person assumption:** Current models assume a single occupant per zone. Multi-person detection (`pipeline/multi_person.py`) suppresses alerts when multiple occupants are detected but does not provide per-person monitoring.
+- **Real-world accuracy:** All reported metrics are on mock/synthetic data. In-situ evaluation is needed to validate real-world performance before clinical reliance.
 - **Thick concrete walls:** CSI propagation degrades significantly through reinforced concrete.
 - **ESP32-S3 CSI API:** Subcarrier count varies (52 for HT20, 114 for HT40). Firmware config must match model input shape.
 - **Phase noise:** ESP32 phase data is noisy. Always apply RuView's phase sanitization before frequency-domain analysis.
 - **Raspberry Pi 5 inference:** INT8 quantization pipeline now available (`pipeline/quantization.py`) to reduce model size and latency on edge hardware. Keep models under 5M params.
-- **Real-world accuracy:** All reported metrics are on mock/synthetic data. In-situ evaluation is needed to validate real-world performance before clinical reliance.
+- **Transport mismatch:** RuView firmware uses UDP (ADR-018 binary). ElderCare's pipeline uses MQTT. The UDP-to-MQTT bridge (`ingestion/udp_mqtt_bridge.py`) handles conversion but adds ~1ms latency.
+- **wifi_densepose scope:** The package only provides vitals extraction. Pose estimation types exist but no pre-trained weights are shipped in RuView's repository.
 
 ---
 

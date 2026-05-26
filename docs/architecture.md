@@ -1,4 +1,4 @@
-# ElderCare -- System Architecture (v0.2)
+# ElderCare -- System Architecture (v0.3)
 
 Design document covering system architecture, data flow, component interactions, and design decisions. Updated for v0.2 with 19 new modules spanning quality validation, persistence, observability, shadow mode, adaptive thresholds, and edge integrations.
 
