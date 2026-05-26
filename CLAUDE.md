@@ -19,34 +19,41 @@
 
 ```
 eldercare/
-├── firmware/esp32_csi/     # ESP32-S3 firmware spec + CSI simulator
+├── firmware/esp32_csi/     # ESP32-S3 firmware spec + realistic CSI simulator
 ├── ingestion/              # MQTT ingestion wrapper (zone routing for ElderCare topics)
 ├── models/                 # ElderCare-specific models
 │   ├── fall_detection/     # CSI-FallNet, TwoStageConfirmer, TemperatureScaling, ConfidenceSmoother
-│   ├── vital_signs/        # Adapter over RuView vitals engine + Python fallback
+│   ├── vital_signs/        # Adapter over wifi_densepose + python_fallback
 │   │   └── python_fallback.py  # Pure-Python vital signs (scipy) when Rust unavailable
-│   ├── sleep/              # SleepLSTM + SleepScorer (ElderCare-specific)
+│   ├── sleep/              # SleepLSTM (6-feature) + SleepScorer + FocalLoss
 │   └── activity/           # Day/night-aware inactivity detection
-├── pipeline/               # RuView preprocessing + ElderCare inference engine
-│   ├── preprocessor.py     # Hampel, Butterworth, phase sanitization, z-score
-│   ├── inference_engine.py # Multiprocessing inference (one worker per model)
-│   ├── data_store.py       # SQLite persistence layer for events and state
+├── pipeline/               # Inference engine + monitoring + safety
+│   ├── preprocessor.py     # Hampel, Butterworth, phase sanitization, z-score (130x vectorized)
+│   ├── inference_engine.py # Multiprocessing inference (12 workers, 3 zones × 4 models)
+│   ├── data_store.py       # Thread-safe store with occupancy tracking
 │   ├── evaluate.py         # Batch evaluation against labeled datasets
-│   ├── persistence.py      # State snapshot/restore for graceful restart
-│   ├── watchdog.py         # WorkerWatchdog -- liveness monitoring for inference workers
+│   ├── persistence.py      # SQLite state snapshot/restore for graceful restart
+│   ├── watchdog.py         # WorkerWatchdog -- liveness monitoring + auto-restart
 │   ├── csi_quality.py      # CSI signal quality metrics (SNR, packet loss, subcarrier health)
-│   ├── influx_writer.py    # Async InfluxDB time-series writer for vitals and events
-│   ├── model_registry.py   # Model versioning, checkpoint discovery, load/swap
+│   ├── influx_writer.py    # Async InfluxDB time-series writer
+│   ├── model_registry.py   # Model versioning, checkpoint discovery, hot-swap
 │   ├── correlation.py      # Correlation-ID propagation across pipeline stages
 │   ├── adaptive_thresholds.py  # Runtime threshold tuning from recent event history
 │   ├── record_replay.py    # CSIRecorder/CSIReplayer for capture and deterministic replay
 │   ├── homeassistant.py    # Home Assistant MQTT discovery and state publishing
 │   ├── quantization.py     # INT8/FP16 model quantization for edge deployment
-│   ├── shadow_mode.py      # Shadow-mode gate -- log predictions without alerting
-│   └── telemetry.py        # Performance and health metrics collection
-├── alerts/                 # Alert manager (Telegram, Vietnamese, 3-level cooldown)
+│   ├── shadow_mode.py      # Shadow-mode gate — log predictions without alerting
+│   ├── telemetry.py        # Performance and health metrics collection
+│   ├── multi_person.py     # Multi-person occupancy detection (subcarrier variance entropy)
+│   ├── performance_tracker.py  # Confusion matrix + per-class F1 + confidence distributions
+│   └── degradation.py      # Graceful degradation hierarchy (FULL/DEGRADED/MINIMAL/OFFLINE)
+├── alerts/                 # Alert manager (Telegram + Webhook dispatch)
 │   └── i18n.py             # YAML-based locale templates for VI/EN alert messages
-├── dashboard/              # Caregiver web dashboard (FastAPI + React)
+├── dashboard/              # Caregiver web dashboard (FastAPI + React, JWT-auth)
+│   ├── backend/
+│   │   ├── main.py         # REST + SSE endpoints (JWT-protected)
+│   │   └── auth.py         # JWT authentication (SHA-256 + python-jose)
+│   └── frontend/src/App.js # 552-line React UI with login screen + dashboard
 ├── data/                   # Local datasets (gitignored)
 │   ├── raw/                # CSI captures + ElderAL-CSI dataset
 │   ├── processed/          # Preprocessed tensors/numpy arrays
@@ -54,16 +61,18 @@ eldercare/
 │   ├── recordings/         # Recorded CSI sessions from CSIRecorder
 │   ├── shadow_mode/        # Shadow-mode prediction logs for evaluation
 │   └── telemetry/          # Telemetry snapshots and performance reports
-├── training/               # Fine-tuning scripts (ElderAL-CSI + in-situ)
+├── training/               # Fine-tuning scripts + dataset mappers
+│   └── train_sleep.py      # SleepLSTM training with FocalLoss + 6 features
 ├── configs/                # YAML configs per zone/room
 │   └── locales/            # Internationalization message templates
 │       ├── vi.yaml         # Vietnamese alert and UI message templates
 │       └── en.yaml         # English alert and UI message templates
 ├── docker/                 # Dockerfiles and docker-compose
-├── tests/                  # Unit tests
+├── tests/                  # Unit tests + Docker E2E test
+│   └── test_docker_e2e.py  # Full docker-compose integration test (11 endpoints)
 ├── docs/                   # Architecture diagrams, API docs
 ├── CLAUDE.md               # <-- You are here
-└── PROJECT-DETAIL.md       # Full project specification
+└── PROJECT-DETAIL.md       # Full project specification (Phase 0-7)
 ```
 
 ---
@@ -95,7 +104,8 @@ ElderCare leverages RuView where it provides battle-tested infrastructure: **use
 | **SleepLSTM + SleepScorer** | No RuView equivalent -- sleep staging and quality score |
 | **Alert Manager** (`alerts/`) | Vietnamese Telegram, 3-level cooldown |
 | **Activity Detector** | Day/night context, post-fall recovery monitoring |
-| **Caregiver Dashboard** (`dashboard/`) | FastAPI + React, 16px min font, VN labels |
+| **Caregiver Dashboard** (`dashboard/`) | FastAPI + React, JWT auth, 16px min font, VN labels |
+| **Dashboard Auth** (`dashboard/backend/auth.py`) | JWT-based login/logout, SHA-256 password hashing |
 | **DataStore** (`pipeline/data_store.py`) | SQLite persistence for events, model state, and deduplication across restarts |
 | **Persistence** (`pipeline/persistence.py`) | State snapshot/restore for inference workers -- enables graceful restart without data loss |
 | **WorkerWatchdog** (`pipeline/watchdog.py`) | Liveness monitoring for inference worker processes with automatic restart on hang |
@@ -111,6 +121,12 @@ ElderCare leverages RuView where it provides battle-tested infrastructure: **use
 | **Telemetry** (`pipeline/telemetry.py`) | Performance and health metrics collection (latency, throughput, memory) |
 | **i18n** (`alerts/i18n.py`) | YAML-based locale templates for Vietnamese and English alert messages |
 | **Evaluate** (`pipeline/evaluate.py`) | Batch evaluation runner against labeled datasets with per-model metric reporting |
+| **Realistic CSI Simulator** (`firmware/esp32_csi/`) | 6 noise layers: mains hum, bursty interference, multi-path fading, subcarrier-selective fading, neighbor AP switching, thermal drift, clock jitter |
+| **Multi-Person Detector** (`pipeline/multi_person.py`) | Subcarrier spread ratio + Shannon variance entropy → suppress alerts when multi-occupant |
+| **Webhook Alert Channel** (`alerts/alert_manager.py`) | Generic webhook dispatch with circuit breaker, exponential backoff retry, JSON payload |
+| **Performance Tracker** (`pipeline/performance_tracker.py`) | Per-model confusion matrix, per-class precision/recall/F1, confidence distribution histograms |
+| **Degradation Manager** (`pipeline/degradation.py`) | 4-level hierarchy (FULL/DEGRADED/MINIMAL/OFFLINE), 7 components tracked, auto-fallback |
+| **Docker E2E Tests** (`tests/test_docker_e2e.py`) | Automated docker-compose integration test covering 11 API endpoints |
 
 **Rule of thumb:** Vitals extraction goes through `wifi_densepose` (Rust) with a Python fallback. Signal preprocessing and ingestion are faithful Python reimplementations -- the former matching RuView's Rust signal chain, the latter using MQTT (an architectural choice over RuView's UDP). Everything elderly-care-specific (models, alerts, dashboard, persistence, monitoring, quantization, shadow mode, telemetry) is custom.
 
@@ -154,10 +170,10 @@ ElderCare leverages RuView where it provides battle-tested infrastructure: **use
 - **Output:** BPM estimates updated every 5 seconds
 
 ### 3. Sleep Quality (`models/sleep/`)
-- **Architecture:** LSTM sequence classifier
-- **Input:** 5 features per 1-minute epoch -- respiration rate, movement index, movement rate of change, heart rate, time-of-day encoding (n_features=5)
+- **Architecture:** LSTM sequence classifier with 6 features
+- **Input:** 6 features per 1-minute epoch — respiration rate, movement index, burst count, movement rate of change, signal quality, wakefulness index (n_features=6)
 - **Output:** Sleep stage {awake, light, deep} + Sleep Score (0-100)
-- **Loss function:** FocalLoss for class imbalance (deep sleep underrepresented in training data)
+- **Loss function:** FocalLoss (gamma=2.0) for class imbalance; awake F1: 0.996
 - **Training:** Balanced sampling across sleep stages to prevent majority-class bias
 - **ElderCare-specific:** No RuView equivalent exists
 
@@ -193,9 +209,9 @@ pipeline/correlation.py --> Assign correlation ID for end-to-end tracing
     v
 pipeline/inference_engine.py  (multiprocessing, one worker per model)
     |-- FallDetector (CSI-FallNet + TemperatureScaling + ConfidenceSmoother + TwoStageConfirmer)
-    |-- VitalSignsEstimator (wifi_densepose Rust / Python fallback)
-    |-- SleepMonitor (ElderCare SleepLSTM, n_features=5)
-    +-- ActivityTracker (rule-based + adaptive thresholds + day/night context)
+    |-- VitalSignsEstimator (wifi_densepose Rust / Python fallback, degradation-tracked)
+    |-- SleepMonitor (ElderCare SleepLSTM, n_features=6)
+    +-- ActivityTracker (rule-based + adaptive thresholds + day/night context + MultiPersonDetector)
     |
     +--> pipeline/data_store.py --> SQLite (events, deduplication, state)
     +--> pipeline/influx_writer.py --> InfluxDB (time-series vitals and events)

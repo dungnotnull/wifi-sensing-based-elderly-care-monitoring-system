@@ -3,6 +3,7 @@ import axios from 'axios';
 
 const API_BASE = '';
 const POLL_MS = 5000;
+const TOKEN_KEY = 'eldercare_token';
 
 // -- Vietnamese labels -------------------------------------------------------
 const LABELS = {
@@ -50,6 +51,124 @@ const COLORS = {
   chartGrid: '#e0e0e0',
   chartFill: 'rgba(25,118,210,0.08)',
 };
+
+// -- Auth helpers -------------------------------------------------------------
+function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+function setToken(token) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+function getAuthHeaders() {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+// -- Login screen -------------------------------------------------------------
+function LoginScreen({ onLogin }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const resp = await axios.post(`${API_BASE}/api/login`, { username, password });
+      setToken(resp.data.access_token);
+      onLogin();
+    } catch (err) {
+      if (err.response && err.response.status === 401) {
+        setError('Tên đăng nhập hoặc mật khẩu không đúng');
+      } else {
+        setError('Không thể kết nối đến máy chủ');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      justifyContent: 'center', minHeight: '100vh',
+      background: COLORS.bg, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    }}>
+      <div style={{
+        background: COLORS.cardBg, borderRadius: 12, padding: '32px 40px',
+        boxShadow: '0 2px 12px rgba(0,0,0,0.1)', width: 360, maxWidth: '90vw',
+      }}>
+        <h1 style={{ textAlign: 'center', color: COLORS.primary, fontSize: 24, marginBottom: 4 }}>
+          {LABELS.appTitle}
+        </h1>
+        <p style={{ textAlign: 'center', color: COLORS.textSecondary, fontSize: 14, marginBottom: 24 }}>
+          Đăng nhập để truy cập hệ thống giám sát
+        </p>
+        {error && (
+          <div style={{
+            background: COLORS.dangerLight, color: COLORS.danger, borderRadius: 6,
+            padding: '10px 14px', marginBottom: 16, fontSize: 14,
+          }}>
+            {error}
+          </div>
+        )}
+        <form onSubmit={handleSubmit}>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: 'block', fontSize: 14, fontWeight: 600, marginBottom: 4, color: COLORS.text }}>
+              Tên đăng nhập
+            </label>
+            <input
+              type="text"
+              value={username}
+              onChange={e => setUsername(e.target.value)}
+              autoFocus
+              style={{
+                width: '100%', padding: '10px 12px', fontSize: 16,
+                borderRadius: 6, border: `1px solid ${COLORS.border}`,
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <label style={{ display: 'block', fontSize: 14, fontWeight: 600, marginBottom: 4, color: COLORS.text }}>
+              Mật khẩu
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              style={{
+                width: '100%', padding: '10px 12px', fontSize: 16,
+                borderRadius: 6, border: `1px solid ${COLORS.border}`,
+                boxSizing: 'border-box',
+              }}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={loading}
+            style={{
+              width: '100%', padding: '12px', fontSize: 16, fontWeight: 700,
+              color: '#fff', background: COLORS.primary, border: 'none',
+              borderRadius: 6, cursor: loading ? 'default' : 'pointer',
+              opacity: loading ? 0.7 : 1,
+            }}
+          >
+            {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
 
 // -- Severity badge -----------------------------------------------------------
 function SeverityBadge({ level }) {
@@ -386,6 +505,31 @@ function DailySummaryPanel({ summary }) {
 
 // -- Main App -----------------------------------------------------------------
 function App() {
+  const [authenticated, setAuthenticated] = useState(!!getToken());
+  const [zones, setZones] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [health, setHealth] = useState({});
+  const [dailySummary, setDailySummary] = useState('');
+  const [vitalsData, setVitalsData] = useState({});
+  const [sleepData, setSleepData] = useState({});
+  const [selectedZone, setSelectedZone] = useState(null);
+  const [chartWidth, setChartWidth] = useState(600);
+  const chartContainerRef = useRef(null);
+
+  const handleLogout = () => {
+    clearToken();
+    setAuthenticated(false);
+  };
+
+  if (!authenticated) {
+    return <LoginScreen onLogin={() => setAuthenticated(true)} />;
+  }
+
+  return <Dashboard onLogout={handleLogout} />;
+}
+
+// -- Dashboard (wrapped by App) -----------------------------------------------
+function Dashboard({ onLogout }) {
   const [zones, setZones] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [health, setHealth] = useState({});
@@ -410,26 +554,30 @@ function App() {
 
   // Polling
   useEffect(() => {
+    const config = { headers: getAuthHeaders() };
     const fetchAll = () => {
-      axios.get(`${API_BASE}/api/zones`).then(r => {
+      axios.get(`${API_BASE}/api/zones`, config).then(r => {
         setZones(r.data);
         if (!selectedZone && r.data.length > 0) {
           setSelectedZone(r.data[0].zone_id);
         }
-      }).catch(() => {});
-      axios.get(`${API_BASE}/api/alerts?limit=30`).then(r => setAlerts(r.data)).catch(() => {});
-      axios.get(`${API_BASE}/api/health`).then(r => setHealth(r.data)).catch(() => {});
-      axios.get(`${API_BASE}/api/daily-summary`).then(r => setDailySummary(r.data.summary || '')).catch(() => {});
+      }).catch(err => {
+        if (err.response && err.response.status === 401) onLogout();
+      });
+      axios.get(`${API_BASE}/api/alerts?limit=30`, config).then(r => setAlerts(r.data)).catch(() => {});
+      axios.get(`${API_BASE}/api/health`, config).then(r => setHealth(r.data)).catch(() => {});
+      axios.get(`${API_BASE}/api/daily-summary`, config).then(r => setDailySummary(r.data.summary || '')).catch(() => {});
     };
     fetchAll();
     const interval = setInterval(fetchAll, POLL_MS);
     return () => clearInterval(interval);
-  }, [selectedZone]);
+  }, [selectedZone, onLogout]);
 
   // Fetch vitals for selected zone
   useEffect(() => {
     if (!selectedZone) return;
-    axios.get(`${API_BASE}/api/vitals?zone_id=${selectedZone}&hours=24`).then(r => {
+    const config = { headers: getAuthHeaders() };
+    axios.get(`${API_BASE}/api/vitals?zone_id=${selectedZone}&hours=24`, config).then(r => {
       setVitalsData(prev => ({
         ...prev,
         [selectedZone]: (r.data || []).filter(d => d.respiration_bpm != null).map(d => ({
@@ -437,7 +585,7 @@ function App() {
         })),
       }));
     }).catch(() => {});
-    axios.get(`${API_BASE}/api/sleep?zone_id=${selectedZone}&days=30`).then(r => {
+    axios.get(`${API_BASE}/api/sleep?zone_id=${selectedZone}&days=30`, config).then(r => {
       setSleepData(prev => ({
         ...prev,
         [selectedZone]: (r.data || []).map(d => ({
@@ -461,10 +609,22 @@ function App() {
       {/* Header */}
       <header style={{
         background: COLORS.primary, color: '#fff', padding: '14px 20px',
-        display: 'flex', alignItems: 'center', gap: 12,
+        display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between',
       }}>
-        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>{LABELS.appTitle}</h1>
-        <span style={{ fontSize: 16, opacity: 0.85 }}>{LABELS.appSubtitle}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>{LABELS.appTitle}</h1>
+          <span style={{ fontSize: 16, opacity: 0.85 }}>{LABELS.appSubtitle}</span>
+        </div>
+        <button
+          onClick={onLogout}
+          style={{
+            background: 'rgba(255,255,255,0.2)', color: '#fff', border: '1px solid rgba(255,255,255,0.3)',
+            borderRadius: 6, padding: '6px 16px', fontSize: 14, fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Đăng xuất
+        </button>
       </header>
 
       <div style={{ maxWidth: 960, margin: '0 auto', padding: '16px 16px 40px' }}>

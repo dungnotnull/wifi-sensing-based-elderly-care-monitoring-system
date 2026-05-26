@@ -56,6 +56,8 @@ class ZoneStatus:
     sleep_stage: str = "unknown"
     sleep_score: Optional[float] = None
     online: bool = False
+    occupancy: str = "unknown"
+    occupancy_confidence: float = 0.0
 
 
 @dataclass
@@ -185,16 +187,19 @@ class InferenceDataStore:
             if zone_id not in self._sleep_records:
                 self._sleep_records[zone_id] = []
 
-    def update_activity(self, zone_id: str, state: str, alert: Optional[str] = None) -> None:
+    def update_activity(self, zone_id: str, state: str, alert: Optional[str] = None,
+                        occupancy: str = "unknown", occupancy_confidence: float = 0.0) -> None:
         with self._lock:
             zs = self._zone_status.get(zone_id)
             if zs:
                 zs.activity_state = state
+                zs.occupancy = occupancy
+                zs.occupancy_confidence = occupancy_confidence
                 zs.last_seen = time.time()
                 zs.online = True
         if self._persistence is not None:
             self._persistence.buffer_zone_status(zone_id, {
-                "activity_state": state, "online": 1,
+                "activity_state": state, "online": 1, "occupancy": occupancy,
                 "last_seen": time.time(), "updated_at": time.time(),
             })
         influx = _get_influx_writer()

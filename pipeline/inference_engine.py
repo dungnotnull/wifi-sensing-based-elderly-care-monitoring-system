@@ -159,12 +159,31 @@ class VitalSignsWorker(InferenceWorker):
     def _ensure_adapter(self) -> None:
         if self._adapter is not None:
             return
-        from models.vital_signs.estimator import VitalsAdapter
-        self._adapter = VitalsAdapter(
-            n_subcarriers=self._n_subcarriers, sample_rate=self._sample_rate,
-            respiration_window_secs=self.config.get("respiration_window_seconds", 30.0),
-            heart_rate_window_secs=self.config.get("heart_rate_window_seconds", 15.0),
-        )
+        from pipeline.degradation import degradation
+        self._degradation = degradation
+        try:
+            from models.vital_signs.estimator import VitalsAdapter
+            self._adapter = VitalsAdapter(
+                n_subcarriers=self._n_subcarriers, sample_rate=self._sample_rate,
+                respiration_window_secs=self.config.get("respiration_window_seconds", 30.0),
+                heart_rate_window_secs=self.config.get("heart_rate_window_seconds", 15.0),
+            )
+            # VitalsAdapter auto-tries Rust, falls back to Python internally.
+            # Check which backend actually loaded.
+            if getattr(self._adapter, '_using_fallback', False):
+                self._degradation.degrade("vital_signs")
+                logger.warning(f"[{self.model_name}] Using Python scipy fallback for vitals")
+        except Exception as e:
+            self._degradation.mark_error("vital_signs", str(e))
+            msg = self._degradation.degrade("vital_signs")
+            if msg:
+                logger.warning(f"[{self.model_name}] {msg}")
+            # Create fallback directly
+            from models.vital_signs.python_fallback import PythonVitalsFallback
+            self._adapter = PythonVitalsFallback(
+                n_subcarriers=self._n_subcarriers, sample_rate=self._sample_rate,
+            )
+            self._degradation.degrade("vital_signs")
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
         self._ensure_adapter()
@@ -201,7 +220,7 @@ class SleepWorker(InferenceWorker):
             return
         from models.sleep.model import SleepLSTM, SleepScorer, SleepFeatureExtractor
         self._feature_extractor = SleepFeatureExtractor(sample_rate=self._sample_rate)
-        self._model = SleepLSTM(n_features=5, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
+        self._model = SleepLSTM(n_features=6, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3)
         self._model.eval()
         try:
             ckpt = torch.load("models/sleep/checkpoints/sleep_lstm_best.pth", map_location="cpu")
@@ -268,6 +287,7 @@ class ActivityWorker(InferenceWorker):
         if self._detector is not None:
             return
         from models.activity.detector import ActivityDetector, PostFallInactivityChecker
+        from pipeline.multi_person import MultiPersonDetector
         self._detector = ActivityDetector(
             threshold_active=self.config.get("threshold_active", 0.5),
             threshold_still=self.config.get("threshold_still", 0.15),
@@ -279,6 +299,13 @@ class ActivityWorker(InferenceWorker):
         )
         self._post_fall_checker = PostFallInactivityChecker(
             recovery_timeout_seconds=self.config.get("recovery_timeout_seconds", 30.0),
+        )
+        self._multi_person_detector = MultiPersonDetector(
+            window_frames=self.config.get("multi_person_window_frames", 250),
+            spread_threshold=self.config.get("multi_person_spread_threshold", 0.45),
+            entropy_threshold=self.config.get("multi_person_entropy_threshold", 2.5),
+            confirmation_frames=self.config.get("multi_person_confirm_frames", 50),
+            cooldown_seconds=self.config.get("multi_person_cooldown_seconds", 30.0),
         )
 
     def process(self, packet: dict) -> Optional[InferenceResult]:
@@ -308,7 +335,9 @@ class ActivityWorker(InferenceWorker):
         else:
             self._inactivity_start = None
         post_fall_alert = self._post_fall_checker.check(amp, ts)
-        data = {"state": state, "alert": alert}
+        occupancy = self._multi_person_detector.analyze(amp)
+        data = {"state": state, "alert": alert, "occupancy": occupancy.state,
+                "occupancy_confidence": occupancy.confidence}
         if post_fall_alert is not None:
             data["post_fall_alert"] = post_fall_alert
         return InferenceResult(
@@ -355,10 +384,14 @@ class _ResultOrchestrator(threading.Thread):
         zone_cfg = self._engine._zone_configs.get(zid, {})
         zone_name = zone_cfg.get("name", zid)
 
+        # Multi-person gate: suppress alerts for multi-occupant zones
+        multi_occupant = r.data.get("occupancy") if r.model_name == "activity" else None
+        suppress_alerts = multi_occupant == "multi"
+
         if r.model_name == "fall_detection":
             fd = r.data
             data_store.update_fall(zid, fd["fall_detected"], fd["fall_confidence"])
-            if fd["fall_detected"]:
+            if fd["fall_detected"] and not suppress_alerts:
                 self._send_alert(zid, zone_name, "EMERGENCY",
                                  locale.t("alerts.fall_detected"),
                                  {"confidence": fd["fall_confidence"]},
@@ -374,15 +407,19 @@ class _ResultOrchestrator(threading.Thread):
             data_store.update_sleep(zid, r.data["sleep_stage"], r.data["sleep_score"])
 
         elif r.model_name == "activity":
-            data_store.update_activity(zid, r.data["state"], r.data.get("alert"))
-            if r.data.get("alert") == "WARNING":
-                self._send_alert(zid, zone_name, "WARNING",
-                                 locale.t("alerts.inactivity_detected", zone_id=zid),
-                                 event_type="inactivity")
-            if r.data.get("post_fall_alert") == "EMERGENCY":
-                self._send_alert(zid, zone_name, "EMERGENCY",
-                                 locale.t("alerts.post_fall_emergency", zone_name=zone_name),
-                                 event_type="fall")
+            occupancy = r.data.get("occupancy", "single")
+            occ_conf = r.data.get("occupancy_confidence", 0.0)
+            data_store.update_activity(zid, r.data["state"], r.data.get("alert"),
+                                       occupancy=occupancy, occupancy_confidence=occ_conf)
+            if not suppress_alerts:
+                if r.data.get("alert") == "WARNING":
+                    self._send_alert(zid, zone_name, "WARNING",
+                                     locale.t("alerts.inactivity_detected", zone_id=zid),
+                                     event_type="inactivity")
+                if r.data.get("post_fall_alert") == "EMERGENCY":
+                    self._send_alert(zid, zone_name, "EMERGENCY",
+                                     locale.t("alerts.post_fall_emergency", zone_name=zone_name),
+                                     event_type="fall")
 
     def _check_daily_summary(self) -> None:
         from datetime import datetime

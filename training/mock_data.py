@@ -79,7 +79,7 @@ def generate_fall_dataset(
 def generate_sleep_dataset(
     n_nights: int = 100,
     epochs_per_night: int = 480,  # 480 epochs = 8 hours
-    n_features: int = 5,
+    n_features: int = 6,
     seed: int = 99,
     output_dir: Optional[Path] = None,
 ) -> tuple[Path, Path]:
@@ -177,28 +177,33 @@ def _make_sleep_night(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generate one night of sleep data with balanced stage distribution.
 
-    Sleep architecture includes deliberate awake periods throughout the night
-    to ensure the awake class is well-represented (not just ~5% at boundaries).
-    Target distribution: awake ~25%, light ~40%, deep ~35%.
+    Features are designed to be realistically discriminative:
+      - Awake: high movement variance (0.10-0.40), high burst count (3-15),
+               high wakefulness index (0.4-0.9), elevated respiration (16-22 bpm)
+      - Light:  moderate movement (0.02-0.12), low burst count (0-3),
+               wakefulness index (0.05-0.30), moderate respiration (13-17 bpm)
+      - Deep:   minimal movement (0.005-0.04), zero bursts normally,
+               wakefulness index (0.0-0.10), slow respiration (11-15 bpm)
+
+    Target distribution: awake ~22%, light ~40%, deep ~38%
     """
     features = np.zeros((n_epochs, n_features), dtype=np.float32)
     labels = np.zeros(n_epochs, dtype=np.int64)
 
-    # Build stage sequence with awake segments interspersed for balance
     state_chains = [
-        [0] * int(rng.integers(15, 30)),      # initial awake (bedtime)
-        [1] * int(rng.integers(20, 50)),       # light sleep onset
-        [2] * int(rng.integers(40, 80)),       # first deep cycle
-        [1] * int(rng.integers(15, 30)),       # light
-        [0] * int(rng.integers(8, 20)),        # brief awakening
-        [1] * int(rng.integers(20, 40)),       # back to light
-        [2] * int(rng.integers(30, 60)),       # second deep cycle
-        [1] * int(rng.integers(15, 30)),       # light
-        [0] * int(rng.integers(5, 15)),        # brief awakening
-        [1] * int(rng.integers(15, 25)),       # light
-        [2] * int(rng.integers(20, 40)),       # third deep cycle
-        [1] * int(rng.integers(20, 40)),       # light
-        [0] * int(rng.integers(10, 25)),       # morning awakening
+        [0] * int(rng.integers(12, 25)),
+        [1] * int(rng.integers(20, 50)),
+        [2] * int(rng.integers(40, 80)),
+        [1] * int(rng.integers(15, 30)),
+        [0] * int(rng.integers(6, 15)),
+        [1] * int(rng.integers(20, 40)),
+        [2] * int(rng.integers(30, 60)),
+        [1] * int(rng.integers(15, 30)),
+        [0] * int(rng.integers(3, 10)),
+        [1] * int(rng.integers(15, 25)),
+        [2] * int(rng.integers(20, 40)),
+        [1] * int(rng.integers(20, 40)),
+        [0] * int(rng.integers(8, 20)),
     ]
     all_stages: list[int] = []
     for chain in state_chains:
@@ -213,27 +218,29 @@ def _make_sleep_night(
     for t, stage in enumerate(all_stages):
         labels[t] = stage
 
-        if stage == 0:  # awake -- higher movement variance
+        if stage == 0:  # awake
             resp = rng.normal(18, 2.5)
             resp_std = rng.uniform(1.0, 3.5)
             movement = rng.uniform(0.10, 0.40)
-            bursts = int(rng.integers(3, 15))
+            bursts = float(rng.integers(3, 15))
+            wakefulness = rng.uniform(0.40, 0.90)
         elif stage == 1:  # light
             resp = rng.normal(15, 1.5)
             resp_std = rng.uniform(0.5, 1.5)
             movement = rng.uniform(0.02, 0.12)
-            bursts = int(rng.integers(0, 3))
+            bursts = float(rng.integers(0, 3))
+            wakefulness = rng.uniform(0.05, 0.30)
         else:  # deep
             resp = rng.normal(13, 1.0)
             resp_std = rng.uniform(0.2, 0.8)
             movement = rng.uniform(0.005, 0.04)
-            bursts = int(rng.integers(0, 1))
+            bursts = float(rng.integers(0, 2))
+            wakefulness = rng.uniform(0.0, 0.10)
 
-        # Transition feature: movement rate of change
         movement_rate_of_change = movement - prev_movement
         prev_movement = movement
 
-        features[t] = [resp, resp_std, movement, bursts, movement_rate_of_change]
+        features[t] = [resp, resp_std, movement, bursts, movement_rate_of_change, wakefulness]
 
     return features, labels
 

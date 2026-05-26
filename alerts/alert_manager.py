@@ -2,7 +2,7 @@
 Alert Manager
 
 Subscribes to inference events, applies threshold logic, cooldown
-management, and dispatches alerts to Telegram and local log/InfluxDB.
+management, and dispatches alerts to Telegram, Webhook, and local log.
 
 Alert levels:
   - INFO    : Normal daily summary / status update
@@ -10,13 +10,17 @@ Alert levels:
   - EMERGENCY: Fall detected / no recovery / life-threatening
 """
 
+import json
 import logging
 import os
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any, Optional
+from urllib import request
+from urllib.error import URLError
 
 import yaml
 from dotenv import load_dotenv
@@ -45,8 +49,7 @@ class AlertMessage:
     data: dict[str, Any] = field(default_factory=dict)
 
     def format_vn(self) -> str:
-        """Format alert message using the active locale."""
-        level_key = self.level.value.lower()  # info / warning / emergency
+        level_key = self.level.value.lower()
         level_label = locale.t(f"alerts.level_{level_key}")
         level_icon = locale.t(f"alerts.icon_{level_key}")
 
@@ -62,21 +65,35 @@ class AlertMessage:
             description=self.description,
         )
 
+    def to_webhook_payload(self) -> dict:
+        """JSON payload for webhook delivery."""
+        return {
+            "zone_id": self.zone_id,
+            "zone_name": self.zone_name,
+            "level": self.level.value,
+            "event_type": self.event_type,
+            "timestamp": self.timestamp,
+            "description": self.description,
+            "data": self.data,
+        }
+
 
 class AlertManager:
-    """Manages alert generation, cooldown, and dispatch."""
+    """Manages alert generation, cooldown, and dispatch to multiple channels."""
 
     def __init__(self, config_path: str = "configs/alerts.yaml") -> None:
         self.config = self._load_config(config_path)
-        self._last_alert_time: dict[str, float] = {}  # keyed by (level, zone)
+        self._last_alert_time: dict[str, float] = {}
         self._telegram_bot: Optional[Any] = None
         self._active_alerts: list[AlertMessage] = []
+        self._webhook_session_lock = threading.Lock()
+        self._webhook_failures: int = 0
+        self._webhook_last_failure: float = 0.0
 
     def _load_config(self, path: str) -> dict:
         if os.path.exists(path):
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 raw = f.read()
-                # Resolve env vars in template ${VAR}
                 raw = os.path.expandvars(raw)
                 return yaml.safe_load(raw)
         logger.warning(f"Alert config not found: {path}. Using defaults.")
@@ -93,7 +110,6 @@ class AlertManager:
         cooldown_key = f"{alert.level.value}_{alert.zone_id}"
         now = time.time()
 
-        # Cooldown check
         cooldown_config = self.config.get("alert_levels", {}).get(alert.level.value, {})
         cooldown_seconds = cooldown_config.get("cooldown_seconds", 300)
 
@@ -101,33 +117,28 @@ class AlertManager:
             elapsed = now - self._last_alert_time[cooldown_key]
             if elapsed < cooldown_seconds:
                 logger.debug(
-                    f"Alert suppressed by cooldown: {cooldown_key} (elapsed={elapsed:.0f}s < {cooldown_seconds}s)"
+                    f"Alert suppressed by cooldown: {cooldown_key} "
+                    f"(elapsed={elapsed:.0f}s < {cooldown_seconds}s)"
                 )
                 return False
 
         self._last_alert_time[cooldown_key] = now
 
-        # Log the alert
         logger.info(f"[{alert.level.value}] {alert.zone_name}: {alert.description}")
 
-        # Dispatch to Telegram
         self._dispatch_telegram(alert)
+        self._dispatch_webhook(alert)
 
-        # Store in active alerts
         self._active_alerts.append(alert)
         if len(self._active_alerts) > 1000:
             self._active_alerts = self._active_alerts[-500:]
 
-        # Write to log file
         self._log_to_file(alert)
-
-        # Write to InfluxDB (if configured)
         self._write_to_influxdb(alert)
 
         return True
 
     def _dispatch_telegram(self, alert: AlertMessage) -> None:
-        """Send alert via Telegram bot."""
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         chat_ids_str = os.getenv("TELEGRAM_CHAT_ID_PRIMARY", "")
 
@@ -136,7 +147,6 @@ class AlertManager:
             return
 
         try:
-            # Lazy import to keep dependency optional
             from telegram import Bot
 
             if self._telegram_bot is None:
@@ -151,8 +161,63 @@ class AlertManager:
         except Exception:
             logger.exception("Failed to send Telegram alert")
 
+    def _dispatch_webhook(self, alert: AlertMessage) -> None:
+        """Send alert to configured webhook endpoint (supports Zalo, Slack, custom integrations).
+
+        Configure in configs/alerts.yaml or via env vars:
+          WEBHOOK_URL          - full endpoint URL
+          WEBHOOK_HEADERS      - JSON string of extra headers
+          WEBHOOK_RETRY_COUNT  - max retry attempts (default 3)
+          WEBHOOK_TIMEOUT_SEC  - request timeout in seconds (default 10)
+        """
+        webhook_url = os.getenv("WEBHOOK_URL") or self.config.get("webhook", {}).get("url")
+        if not webhook_url:
+            return
+
+        retry_count = int(os.getenv("WEBHOOK_RETRY_COUNT", "3"))
+        timeout_sec = int(os.getenv("WEBHOOK_TIMEOUT_SEC", "10"))
+
+        # Back off if we've had recent failures
+        if self._webhook_failures >= 5 and (time.time() - self._webhook_last_failure) < 300:
+            logger.debug("Webhook circuit breaker open — skipping dispatch")
+            return
+
+        payload = json.dumps(alert.to_webhook_payload()).encode("utf-8")
+
+        extra_headers_raw = os.getenv("WEBHOOK_HEADERS") or self.config.get("webhook", {}).get("headers", "{}")
+        try:
+            extra_headers = json.loads(extra_headers_raw) if isinstance(extra_headers_raw, str) else extra_headers_raw
+        except json.JSONDecodeError:
+            extra_headers = {}
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "ElderCare-AlertManager/0.2",
+            **extra_headers,
+        }
+
+        for attempt in range(retry_count):
+            try:
+                req = request.Request(webhook_url, data=payload, headers=headers, method="POST")
+                resp = request.urlopen(req, timeout=timeout_sec)
+                if 200 <= resp.status < 300:
+                    logger.info(f"Webhook alert sent to {webhook_url} (status={resp.status})")
+                    self._webhook_failures = 0
+                    return
+                else:
+                    logger.warning(f"Webhook returned status {resp.status} (attempt {attempt+1}/{retry_count})")
+            except URLError as e:
+                logger.warning(f"Webhook request failed (attempt {attempt+1}/{retry_count}): {e}")
+            except Exception:
+                logger.exception(f"Webhook unexpected error (attempt {attempt+1}/{retry_count})")
+
+            if attempt < retry_count - 1:
+                time.sleep(2 ** attempt)
+
+        self._webhook_failures += 1
+        self._webhook_last_failure = time.time()
+
     def _log_to_file(self, alert: AlertMessage) -> None:
-        """Persist alert to local log."""
         try:
             log_dir = "data"
             os.makedirs(log_dir, exist_ok=True)
@@ -167,8 +232,6 @@ class AlertManager:
             logger.exception("Failed to write alert to log file")
 
     def _write_to_influxdb(self, alert: AlertMessage) -> None:
-        """Write alert event to InfluxDB (placeholder — Phase 3+)."""
-        # Will be implemented in Phase 3 when InfluxDB is integrated
         pass
 
     def get_active_alerts(self, limit: int = 20) -> list[AlertMessage]:
@@ -177,12 +240,8 @@ class AlertManager:
     def send_info(self, zone_id: str, zone_name: str, description: str, data: Optional[dict] = None) -> bool:
         return self.send_alert(
             AlertMessage(
-                zone_id=zone_id,
-                zone_name=zone_name,
-                level=AlertLevel.INFO,
-                event_type="info",
-                timestamp=time.time(),
-                description=description,
+                zone_id=zone_id, zone_name=zone_name, level=AlertLevel.INFO,
+                event_type="info", timestamp=time.time(), description=description,
                 data=data or {},
             )
         )
@@ -190,12 +249,8 @@ class AlertManager:
     def send_warning(self, zone_id: str, zone_name: str, description: str, data: Optional[dict] = None) -> bool:
         return self.send_alert(
             AlertMessage(
-                zone_id=zone_id,
-                zone_name=zone_name,
-                level=AlertLevel.WARNING,
-                event_type="warning",
-                timestamp=time.time(),
-                description=description,
+                zone_id=zone_id, zone_name=zone_name, level=AlertLevel.WARNING,
+                event_type="warning", timestamp=time.time(), description=description,
                 data=data or {},
             )
         )
@@ -203,12 +258,8 @@ class AlertManager:
     def send_emergency(self, zone_id: str, zone_name: str, description: str, data: Optional[dict] = None) -> bool:
         return self.send_alert(
             AlertMessage(
-                zone_id=zone_id,
-                zone_name=zone_name,
-                level=AlertLevel.EMERGENCY,
-                event_type="emergency",
-                timestamp=time.time(),
-                description=description,
+                zone_id=zone_id, zone_name=zone_name, level=AlertLevel.EMERGENCY,
+                event_type="emergency", timestamp=time.time(), description=description,
                 data=data or {},
             )
         )
@@ -241,11 +292,10 @@ class AlertManager:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-
     mgr = AlertManager()
     mgr.send_info(
         zone_id="zone_test",
-        zone_name="Phòng Test",
+        zone_name="Phong Test",
         description=locale.t("alerts.system_started"),
     )
     print("Test alert dispatched. Check logs.")

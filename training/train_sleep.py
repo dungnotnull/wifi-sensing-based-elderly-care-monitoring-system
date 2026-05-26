@@ -11,6 +11,7 @@ Usage:
 import argparse
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from models.sleep.model import FocalLoss, SleepLSTM
 
 logger = logging.getLogger(__name__)
@@ -33,7 +35,7 @@ class SleepDataset(torch.utils.data.Dataset):
     """Dataset for sleep stage classification.
 
     Each sample is one night of epoch features.
-    Returns (features, labels) of shape (N_epochs, 5) and (N_epochs,).
+    Returns (features, labels) of shape (N_epochs, 6) and (N_epochs,).
     """
 
     def __init__(self, data_path: Path) -> None:
@@ -247,7 +249,7 @@ def main() -> None:
     alpha = n_classes * class_counts / class_counts.sum()
     logger.info(f"FocalLoss alpha weights: awake={alpha[0]:.3f}, light={alpha[1]:.3f}, deep={alpha[2]:.3f}")
 
-    model = SleepLSTM(n_features=5, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3).to(device)
+    model = SleepLSTM(n_features=6, hidden_dim=64, n_layers=2, n_classes=3, dropout=0.3).to(device)
 
     model = train_sleep(
         train_loader, val_loader, model, device,

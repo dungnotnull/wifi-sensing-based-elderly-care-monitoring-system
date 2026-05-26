@@ -9,6 +9,7 @@ shared InferenceDataStore (populated by the inference engine in real time).
 /api/alerts - alert log
 /api/sleep - sleep scores per zone
 /api/health - service health
+/api/login - JWT authentication
 """
 
 import asyncio
@@ -17,18 +18,19 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 from pipeline.data_store import store
+from dashboard.backend.auth import authenticate_user, get_current_user
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="ElderCare Dashboard API",
-    version="0.1.0",
+    version="0.2.0",
     description="Privacy-preserving WiFi-based elderly monitoring system",
 )
 
@@ -39,6 +41,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 class ZoneStatusOut(BaseModel):
@@ -55,6 +67,8 @@ class ZoneStatusOut(BaseModel):
     sleep_stage: str = "unknown"
     sleep_score: Optional[float] = None
     online: bool = False
+    occupancy: str = "unknown"
+    occupancy_confidence: float = 0.0
 
 
 class AlertEntryOut(BaseModel):
@@ -89,7 +103,7 @@ class SleepRecordOut(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 async def root() -> str:
     return """<html><head><title>ElderCare Dashboard</title></head>
-    <body><h1>ElderCare Dashboard API</h1><p>Version 0.1.0</p>
+    <body><h1>ElderCare Dashboard API</h1><p>Version 0.2.0</p>
     <ul><li><a href="/api/zones">/api/zones</a></li>
     <li><a href="/api/vitals">/api/vitals</a></li>
     <li><a href="/api/alerts">/api/alerts</a></li>
@@ -98,6 +112,15 @@ async def root() -> str:
     <li><a href="/api/events">/api/events (SSE)</a></li>
     <li><a href="/api/telemetry">/api/telemetry</a></li>
     <li><a href="/api/shadow-mode/report">/api/shadow-mode/report</a></li></ul></body></html>"""
+
+
+@app.post("/api/login", response_model=LoginResponse)
+async def login(body: LoginRequest) -> dict:
+    token = authenticate_user(body.username, body.password)
+    if token is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"access_token": token, "token_type": "bearer"}
 
 
 @app.get("/api/health")
@@ -143,7 +166,7 @@ async def health_check() -> dict:
 
 
 @app.get("/api/zones", response_model=list[ZoneStatusOut])
-async def get_zones() -> list[dict]:
+async def get_zones(_: str = Depends(get_current_user)) -> list[dict]:
     results = store.get_all_zone_statuses()
     if not results:
         return [{
@@ -160,20 +183,21 @@ async def get_zones() -> list[dict]:
             "heart_rate_confidence": z.heart_rate_confidence,
             "fall_detected": z.fall_detected, "fall_confidence": z.fall_confidence,
             "sleep_stage": z.sleep_stage, "sleep_score": z.sleep_score,
-            "online": z.online,
+            "online": z.online, "occupancy": z.occupancy,
+            "occupancy_confidence": z.occupancy_confidence,
         }
         for z in results
     ]
 
 
 @app.get("/api/vitals", response_model=list[VitalsPoint])
-async def get_vitals(zone_id: str = Query(...), hours: int = Query(1)) -> list[dict]:
+async def get_vitals(zone_id: str = Query(...), hours: int = Query(1), _: str = Depends(get_current_user)) -> list[dict]:
     n_points = hours * 720  # 5s update interval = 720 points per hour
     return store.get_vitals_history(zone_id, n=n_points)
 
 
 @app.get("/api/alerts", response_model=list[AlertEntryOut])
-async def get_alerts(limit: int = Query(50)) -> list[dict]:
+async def get_alerts(limit: int = Query(50), _: str = Depends(get_current_user)) -> list[dict]:
     alerts = store.get_alerts(n=limit)
     for i, a in enumerate(alerts):
         a.setdefault("id", i)
@@ -183,50 +207,50 @@ async def get_alerts(limit: int = Query(50)) -> list[dict]:
 
 
 @app.get("/api/sleep", response_model=list[SleepRecordOut])
-async def get_sleep_scores(zone_id: str = Query(...), days: int = Query(30)) -> list[dict]:
+async def get_sleep_scores(zone_id: str = Query(...), days: int = Query(30), _: str = Depends(get_current_user)) -> list[dict]:
     return store.get_sleep_records(zone_id, n=days)
 
 
 @app.get("/api/daily-summary")
-async def get_daily_summary(dummy: bool = Query(False)) -> dict:
+async def get_daily_summary(dummy: bool = Query(False), _: str = Depends(get_current_user)) -> dict:
     from alerts.daily_summary import generate_daily_summary
     text = generate_daily_summary(dummy=dummy)
     return {"summary": text, "dummy": dummy}
 
 
 @app.get("/api/telemetry")
-async def get_telemetry() -> dict:
+async def get_telemetry(_: str = Depends(get_current_user)) -> dict:
     from pipeline.telemetry import telemetry
     return telemetry.get_dashboard_summary()
 
 
 @app.get("/api/correlation/traces")
-async def get_traces(limit: int = Query(100)) -> list[dict]:
+async def get_traces(limit: int = Query(100), _: str = Depends(get_current_user)) -> list[dict]:
     from pipeline.correlation import tracker
     return tracker.get_recent_traces(n=limit)
 
 
 @app.get("/api/correlation/stats")
-async def get_correlation_stats() -> dict:
+async def get_correlation_stats(_: str = Depends(get_current_user)) -> dict:
     from pipeline.correlation import tracker
     return tracker.get_latency_stats()
 
 
 @app.get("/api/shadow-mode/report")
-async def get_shadow_report() -> dict:
+async def get_shadow_report(_: str = Depends(get_current_user)) -> dict:
     from pipeline.shadow_mode import shadow_mode
     return shadow_mode.generate_report()
 
 
 @app.post("/api/shadow-mode/go-live")
-async def shadow_go_live() -> dict:
+async def shadow_go_live(_: str = Depends(get_current_user)) -> dict:
     from pipeline.shadow_mode import shadow_mode
     shadow_mode.switch_to_live()
     return {"status": "live", "message": "Alerts are now being sent."}
 
 
 @app.get("/api/csi-quality/{zone_id}")
-async def get_csi_quality(zone_id: str) -> dict:
+async def get_csi_quality(zone_id: str, _: str = Depends(get_current_user)) -> dict:
     quality = store.get_csi_quality(zone_id)
     if quality is None:
         return {"zone_id": zone_id, "status": "no_data"}
@@ -234,7 +258,7 @@ async def get_csi_quality(zone_id: str) -> dict:
 
 
 @app.get("/api/adaptive-thresholds")
-async def get_adaptive_thresholds() -> dict:
+async def get_adaptive_thresholds(_: str = Depends(get_current_user)) -> dict:
     return {
         "message": "Thresholds are managed by AdaptiveThresholdManager in the inference engine.",
         "config_path": "configs/thresholds.yaml",
@@ -284,3 +308,27 @@ async def sse_events() -> StreamingResponse:
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/api/model-performance")
+async def get_model_performance(_: str = Depends(get_current_user)) -> dict:
+    from pipeline.performance_tracker import performance_tracker
+    models = performance_tracker.get_all_performance()
+    confidence = {}
+    for m in models:
+        mname = m["model_name"]
+        confidence[mname] = performance_tracker.get_confidence_distribution(mname)
+    return {"models": models, "confidence_distributions": confidence}
+
+
+@app.get("/api/occupancy")
+async def get_occupancy(_: str = Depends(get_current_user)) -> list[dict]:
+    zone_statuses = store.get_all_zone_statuses()
+    return [{"zone_id": z.zone_id, "name": z.name, "occupancy": z.occupancy,
+             "occupancy_confidence": z.occupancy_confidence} for z in zone_statuses]
+
+
+@app.get("/api/degradation")
+async def get_degradation(_: str = Depends(get_current_user)) -> dict:
+    from pipeline.degradation import degradation
+    return degradation.get_health_report()

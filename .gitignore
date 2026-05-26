@@ -50,6 +50,11 @@ Thumbs.db
 # Logs
 *.log
 
+# SQLite runtime databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
 # Node (dashboard frontend)
 dashboard/frontend/node_modules/
 dashboard/frontend/build/
