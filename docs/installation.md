@@ -92,37 +92,61 @@ All tests should pass. You should see `51 passed`.
 
 ---
 
-## 2. ESP32-S3 Firmware
+## 2. ESP32-S3 Firmware (RuView esp32-csi-node v0.6.5)
+
+The firmware is a full esp-idf v5.2 project at `firmware/esp32-csi-node/`, forked from RuView.
+It captures CSI at ~20 Hz in ADR-018 binary format and streams over UDP.
 
 ### 2.1 Prerequisites
-- ESP-IDF v5.x installed on your development machine
+- Docker Desktop (the only reliable cross-platform build method — ESP-IDF does NOT work from Git Bash/MSYS2)
 - USB-C cable for each ESP32-S3 board
-- ESP32-S3 boards (LoLin S3 or DevKitC-1 recommended)
+- ESP32-S3 boards (LoLin S3 or DevKitC-1 recommended, 8 MB flash)
+- esptool (`pip install esptool`)
 
-### 2.2 Flash firmware
+### 2.2 Build firmware (Docker)
 
-The firmware specification lives at `firmware/esp32_csi/`. It captures CSI at 50 Hz (HT20 mode, 52 subcarriers) and transmits via MQTT.
-
-**Refer to the firmware README** at `firmware/esp32_csi/` for exact flashing commands and esp-idf version pinning.
-
-Basic flashing:
 ```bash
-cd firmware/esp32_csi
-idf.py set-target esp32s3
-idf.py build
-idf.py -p /dev/ttyUSB0 flash monitor
+MSYS_NO_PATHCONV=1 docker run --rm \
+  -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
+  espressif/idf:v5.2 bash -c \
+  "rm -rf build sdkconfig && idf.py set-target esp32s3 && idf.py build"
 ```
 
-### 2.3 Node placement
-- Mount at 1.0-1.5m height (chest level)
-- Line-of-sight or one-wall clearance preferred
-- Avoid behind large metal objects or appliances
-- Minimum 3m between nodes
-- Connect to the same WiFi network as the server
+### 2.3 Flash
+
+```bash
+python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
+  write_flash --flash_mode dio --flash_size 8MB \
+  0x0     firmware/esp32-csi-node/build/bootloader/bootloader.bin \
+  0x8000  firmware/esp32-csi-node/build/partition_table/partition-table.bin \
+  0xf000  firmware/esp32-csi-node/build/ota_data_initial.bin \
+  0x20000 firmware/esp32-csi-node/build/esp32-csi-node.bin
+```
+
+### 2.4 Provision WiFi + node_id
+
+```bash
+python firmware/esp32-csi-node/provision.py --port COM7 \
+  --ssid "YourSSID" --password "YourPass" --target-ip <SERVER_IP>
+```
+
+Each ESP32 must have a unique `node_id` (1, 2, 3) matching `configs/zones.yaml`.
+Full firmware documentation: `firmware/esp32-csi-node/README.md`.
 
 ---
 
 ## 3. Quick Start (Local)
+
+### 3.0 Start the UDP-to-MQTT bridge (ESP32 hardware required)
+
+The RuView firmware sends CSI over UDP. Run the bridge to convert ADR-018
+binary frames to MQTT topics:
+
+```bash
+python -m ingestion.udp_mqtt_bridge --config configs/zones.yaml
+```
+
+Skip this if using only the simulator (`csi_simulator.py`).
 
 ### 3.1 Start MQTT broker
 
@@ -189,6 +213,7 @@ docker-compose -f docker/docker-compose.yml up --build
 
 This starts:
 - `mosquitto` -- MQTT broker (port 1883)
+- `udp-mqtt-bridge` -- UDP-to-MQTT bridge (UDP port 5005 → MQTT topics)
 - `eldercare-server` -- FastAPI dashboard + inference (port 8000)
 
 ### 4.2 Verify

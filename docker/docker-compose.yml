@@ -10,6 +10,20 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
     restart: unless-stopped
 
+  # UDP-to-MQTT bridge for RuView ESP32-S3 firmware (ADR-018 binary → JSON/MQTT)
+  udp-mqtt-bridge:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      - mosquitto
+    ports:
+      - "5005:5005/udp"   # CSI frames from ESP32 nodes
+    command: python -m ingestion.udp_mqtt_bridge --config configs/zones.yaml --mqtt-broker mosquitto
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+
   # ElderCare ingestion + inference + alerting
   eldercare-server:
     build:

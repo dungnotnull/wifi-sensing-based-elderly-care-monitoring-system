@@ -1,24 +1,36 @@
 # ElderCare Zone Configuration
 #
 # Defines monitoring zones (rooms/areas) and assigned ESP32 nodes.
-# Each zone has a unique ID, name, and MAC address binding.
-# ESP32 nodes transmit CSI via MQTT under topic: eldercare/csi/{zone_id}
+# Each zone maps an ESP32 node_id to a human-readable zone name.
+#
+# node_id: The RuView ESP32-S3 firmware's NVS node_id (1-255).
+#   UDP bridge maps node_id → zone_id via this config.
+#   node_id=0 is the default/fallback zone.
+#
+# Two transport modes are supported:
+#   A) UDP (direct from ESP32): udp_mqtt_bridge.py listens on port 5005
+#      and republishes to MQTT
+#   B) MQTT (native): ESP32 publishes directly to eldercare/csi/{zone_id}
+#
 
 zones:
   - zone_id: "zone_bedroom"
     name: "Phòng ngủ"
+    node_id: 1
     mac_address: "AA:BB:CC:DD:EE:01"
     mqtt_topic: "eldercare/csi/zone_bedroom"
     active: true
 
   - zone_id: "zone_living"
     name: "Phòng khách"
+    node_id: 2
     mac_address: "AA:BB:CC:DD:EE:02"
     mqtt_topic: "eldercare/csi/zone_living"
     active: true
 
   - zone_id: "zone_hallway"
     name: "Hành lang"
+    node_id: 3
     mac_address: "AA:BB:CC:DD:EE:03"
     mqtt_topic: "eldercare/csi/zone_hallway"
     active: true

@@ -55,6 +55,14 @@ data/*.db
 data/*.db-shm
 data/*.db-wal
 
+# Firmware build artifacts (esp-idf)
+firmware/esp32-csi-node/build/
+firmware/esp32-csi-node/sdkconfig
+firmware/esp32-csi-node/.claude-flow/
+
+# RuView temp clone
+ruview-firmware-temp/
+
 # Node (dashboard frontend)
 dashboard/frontend/node_modules/
 dashboard/frontend/build/

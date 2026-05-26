@@ -1,18 +1,13 @@
 """
-ESP32-S3 CSI Capture Firmware — Placeholder
+ESP32-S3 CSI Capture Firmware Specification
 
-This file documents the expected firmware behavior. The actual firmware is
-written in C (ESP-IDF CSI API) and flashed to the ESP32-S3.
-
-Expected behavior:
-  - Samples WiFi CSI at ~50 Hz (every 20ms)
-  - Extracts CSI amplitude and phase per subcarrier (52 subcarriers for HT20)
-  - Packages data: {zone_id, timestamp, sequence_number, csi_amplitude: [52], csi_phase: [52], rssi}
-  - Publishes to MQTT topic: eldercare/csi/{zone_id}
-  - Auto-reconnects on WiFi / MQTT disconnect
-  - Pins esp-idf v5.x for CSI API stability
+The firmware is in firmware/esp32-csi-node/ — a full esp-idf v5.2 project
+forked from RuView (version v0.6.5). It captures CSI at ~20 Hz and streams
+raw I/Q data over UDP using the ADR-018 binary protocol.
 
 For testing without hardware, use csi_simulator.py to generate synthetic CSI data.
+
+Transport path: ESP32 UDP → udp_mqtt_bridge.py → MQTT → ingestion/receiver.py
 """
 
 import json
@@ -27,7 +22,7 @@ class CSIPacket:
     zone_id: str
     timestamp: float
     sequence_number: int
-    csi_amplitude: list[float]   # 52 subcarriers
+    csi_amplitude: list[float]   # 52 subcarriers (downsampled from 64)
     csi_phase: list[float]       # 52 subcarriers
     rssi: float
 
@@ -53,17 +48,31 @@ class CSIPacket:
         return cls(**d)
 
 
-# Firmware build instructions placeholder:
 FIRMWARE_BUILD_DOC = """
-ESP32-S3 Firmware Build Instructions:
-1. Install ESP-IDF v5.x: https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/
-2. Configure WiFi and MQTT credentials in sdkconfig
-3. Build: idf.py build
-4. Flash: idf.py -p /dev/ttyUSB0 flash
-5. Monitor output: idf.py monitor
+ESP32-S3 Firmware (RuView esp32-csi-node v0.6.5)
 
-CSI configuration:
-- HT20 mode (20 MHz bandwidth) → 52 usable subcarriers
-- Sample rate: 50 Hz (20ms interval)
-- CSI reporting: amplitude + phase per subcarrier
+Located at: firmware/esp32-csi-node/
+
+Build (Docker required):
+  MSYS_NO_PATHCONV=1 docker run --rm \
+    -v "$(pwd)/firmware/esp32-csi-node:/project" -w /project \
+    espressif/idf:v5.2 bash -c \
+    "rm -rf build sdkconfig && idf.py set-target esp32s3 && idf.py build"
+
+Flash:
+  python -m esptool --chip esp32s3 --port COM7 --baud 460800 \
+    write_flash --flash_mode dio --flash_size 8MB \
+    0x0     firmware/esp32-csi-node/build/bootloader/bootloader.bin \
+    0x8000  firmware/esp32-csi-node/build/partition_table/partition-table.bin \
+    0xf000  firmware/esp32-csi-node/build/ota_data_initial.bin \
+    0x20000 firmware/esp32-csi-node/build/esp32-csi-node.bin
+
+Provision WiFi:
+  python firmware/esp32-csi-node/provision.py --port COM7 \
+    --ssid "YourSSID" --password "YourPass" --target-ip <SERVER_IP>
+
+Run the bridge to convert UDP → MQTT:
+  python -m ingestion.udp_mqtt_bridge --config configs/zones.yaml
+
+Node IDs are set via NVS on the ESP32 and must match configs/zones.yaml.
 """
